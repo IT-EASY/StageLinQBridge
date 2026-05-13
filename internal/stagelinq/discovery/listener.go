@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/hex"
 	"net"
 	"time"
 
@@ -69,7 +70,11 @@ func (l *Listener) Listen(ctx context.Context) (<-chan Device, error) {
 
 			packet, err := ParsePacket(buffer[:count])
 			if err != nil {
-				l.logger.Trace("ignored invalid discovery packet", "error", err)
+				l.logger.Debug("ignored invalid discovery packet",
+					"src", remote.String(),
+					"error", err,
+					"bytes", hex.EncodeToString(buffer[:count]),
+				)
 				continue
 			}
 

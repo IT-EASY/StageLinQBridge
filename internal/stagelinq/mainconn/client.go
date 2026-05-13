@@ -1,6 +1,7 @@
 package mainconn
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net"
@@ -13,8 +14,10 @@ import (
 )
 
 type Client struct {
-	logger *debug.Logger
-	device discovery.Device
+	logger       *debug.Logger
+	device       discovery.Device
+	clientToken  token.Token
+	stateMapPort uint16
 
 	conn net.Conn
 
@@ -22,11 +25,13 @@ type Client struct {
 	services map[string]uint16
 }
 
-func NewClient(logger *debug.Logger, device discovery.Device) *Client {
+func NewClient(logger *debug.Logger, device discovery.Device, clientToken token.Token, stateMapPort uint16) *Client {
 	return &Client{
-		logger:   logger,
-		device:   device,
-		services: make(map[string]uint16),
+		logger:       logger,
+		device:       device,
+		clientToken:  clientToken,
+		stateMapPort: stateMapPort,
+		services:     make(map[string]uint16),
 	}
 }
 
@@ -46,13 +51,24 @@ func (c *Client) Connect(ctx context.Context) error {
 		"version", c.device.SoftwareVersion,
 	)
 
-	err = c.SendServicesRequest()
-	if err != nil {
+	// Start the read loop first so it is ready before we send anything.
+	go c.readLoop(ctx)
+
+	// Announce our own services before requesting theirs — mirrors what our
+	// server does on incoming connections.
+	ann := BuildServiceAnnouncement(c.clientToken, "StateMap", c.stateMapPort)
+	if _, err := conn.Write(ann); err != nil {
 		_ = conn.Close()
 		return err
 	}
 
-	go c.readLoop(ctx)
+	req := BuildServicesRequest(c.clientToken)
+	if _, err := conn.Write(req); err != nil {
+		_ = conn.Close()
+		return err
+	}
+
+	go c.keepaliveLoop(ctx)
 
 	return nil
 }
@@ -70,14 +86,14 @@ func (c *Client) SendServicesRequest() error {
 		return net.ErrClosed
 	}
 
-	data := BuildServicesRequest(token.SoundSwitch)
+	data := BuildServicesRequest(c.clientToken)
 
 	_, err := c.conn.Write(data)
 	if err != nil {
 		return err
 	}
 
-	c.logger.Debug("services request sent", "token", token.SoundSwitch.Hex())
+	c.logger.Debug("services request sent", "token", c.clientToken.Hex())
 
 	return nil
 }
@@ -120,40 +136,51 @@ func (c *Client) WaitForService(ctx context.Context, name string) (uint16, bool)
 	}
 }
 
-func (c *Client) readLoop(ctx context.Context) {
-	defer c.logger.Debug("main connection read loop stopped")
+func (c *Client) keepaliveLoop(ctx context.Context) {
+	defer c.logger.Debug("main connection keepalive loop stopped")
 
-	buffer := make([]byte, 4096)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			_ = c.Close()
 			return
-		default:
-		}
 
-		_ = c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-
-		count, err := c.conn.Read(buffer)
-		if err != nil {
-			if isTimeout(err) {
-				continue
+		case <-ticker.C:
+			data := BuildReferenceMessage(c.clientToken, c.device.Token)
+			if _, err := c.conn.Write(data); err != nil {
+				c.logger.Warn("keepalive send failed", "error", err)
+				return
 			}
+		}
+	}
+}
 
+func (c *Client) readLoop(ctx context.Context) {
+	defer c.logger.Debug("main connection read loop stopped")
+
+	// Close the connection when the context is cancelled so the blocking
+	// ParseMessage call below returns immediately.
+	go func() {
+		<-ctx.Done()
+		_ = c.conn.Close()
+	}()
+
+	br := bufio.NewReader(c.conn)
+
+	for {
+		messageID, message, err := ParseMessage(br)
+		if err != nil {
+			if ctx.Err() != nil {
+				return // normal shutdown
+			}
 			if err == io.EOF {
 				c.logger.Warn("main connection closed by remote")
 				return
 			}
-
 			c.logger.Warn("main connection read failed", "error", err)
 			return
-		}
-
-		messageID, message, err := ParseMessage(buffer[:count])
-		if err != nil {
-			c.logger.Trace("ignored invalid main connection message", "error", err)
-			continue
 		}
 
 		switch typed := message.(type) {
@@ -187,9 +214,4 @@ func (c *Client) readLoop(ctx context.Context) {
 			)
 		}
 	}
-}
-
-func isTimeout(err error) bool {
-	netErr, ok := err.(net.Error)
-	return ok && netErr.Timeout()
 }

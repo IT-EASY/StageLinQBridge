@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"github.com/it-easy/StageLinQBridge/internal/debug"
+	"github.com/it-easy/StageLinQBridge/internal/network"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/discovery"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/token"
 )
+
+// lanIP may be nil — in that case all active LAN interfaces are used.
 
 const (
 	DefaultInterval = 1 * time.Second
@@ -24,56 +27,50 @@ const (
 type Announcer struct {
 	logger *debug.Logger
 
-	target *net.UDPAddr
-
+	lanIP           net.IP
+	port            uint16
 	source          string
 	softwareName    string
 	softwareVersion string
-	token           token.Token
+	clientToken     token.Token
 
 	interval time.Duration
 }
 
-func New(logger *debug.Logger) *Announcer {
+func New(logger *debug.Logger, clientToken token.Token, lanIP net.IP, port uint16) *Announcer {
 	return &Announcer{
-		logger: logger,
-		target: &net.UDPAddr{
-			IP:   net.IPv4bcast,
-			Port: discovery.DefaultPort,
-		},
+		logger:          logger,
+		lanIP:           lanIP,
+		port:            port,
 		source:          DefaultSource,
 		softwareName:    DefaultSoftwareName,
 		softwareVersion: DefaultSoftwareVersion,
-		token:           token.SoundSwitch,
+		clientToken:     clientToken,
 		interval:        DefaultInterval,
 	}
 }
 
 func (a *Announcer) Start(ctx context.Context) error {
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{
-		IP:   net.IPv4zero,
-		Port: 0,
-	})
-	if err != nil {
-		return err
-	}
+	// Send EXIT first so any device that still has our IP in its peer table
+	// removes the stale entry before we announce as a fresh peer.
+	a.send(ActionExit)
+	time.Sleep(300 * time.Millisecond)
+
+	a.send(ActionHowdy)
+
+	ticker := time.NewTicker(a.interval)
 
 	go func() {
-		defer conn.Close()
-
-		a.send(conn, ActionHowdy)
-
-		ticker := time.NewTicker(a.interval)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
-				a.send(conn, ActionExit)
+				a.send(ActionExit)
 				return
 
 			case <-ticker.C:
-				a.send(conn, ActionHowdy)
+				a.send(ActionHowdy)
 			}
 		}
 	}()
@@ -81,28 +78,46 @@ func (a *Announcer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *Announcer) send(conn *net.UDPConn, action string) {
-	packet := discovery.Packet{
-		Token:           a.token,
+func (a *Announcer) ClientToken() token.Token {
+	return a.clientToken
+}
+
+func (a *Announcer) IsOwnDevice(device discovery.Device) bool {
+	return device.Token == a.clientToken &&
+		device.Source == a.source &&
+		device.SoftwareName == a.softwareName &&
+		device.SoftwareVersion == a.softwareVersion
+}
+
+func (a *Announcer) send(action string) {
+	data := discovery.BuildPacket(discovery.Packet{
+		Token:           a.clientToken,
 		Source:          a.source,
 		Action:          action,
 		SoftwareName:    a.softwareName,
 		SoftwareVersion: a.softwareVersion,
-		Port:            0,
-	}
+		Port:            a.port,
+	})
 
-	data := discovery.BuildPacket(packet)
-
-	_, err := conn.WriteToUDP(data, a.target)
+	broadcastIPs, err := network.BroadcastIPs(a.lanIP)
 	if err != nil {
-		a.logger.Warn("announce failed", "error", err)
+		a.logger.Warn("failed to get broadcast IPs", "error", err)
 		return
 	}
 
-	a.logger.Trace(
-		"announce sent",
-		"action", action,
-		"target", a.target.String(),
-		"token", a.token.Hex(),
-	)
+	for _, ip := range broadcastIPs {
+		target := &net.UDPAddr{IP: ip, Port: discovery.DefaultPort}
+		conn, err := net.DialUDP("udp4", nil, target)
+		if err != nil {
+			a.logger.Warn("announce dial failed", "target", target.String(), "error", err)
+			continue
+		}
+		_, err = conn.Write(data)
+		conn.Close()
+		if err != nil {
+			a.logger.Warn("announce write failed", "target", target.String(), "error", err)
+			continue
+		}
+		a.logger.Trace("announce sent", "action", action, "target", target.String(), "token", a.clientToken.Hex())
+	}
 }

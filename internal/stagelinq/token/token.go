@@ -60,6 +60,15 @@ func MustFromHex(value string) Token {
 	return token
 }
 
+func (t *Token) ParseHex(value string) error {
+	parsed, err := FromHex(value)
+	if err != nil {
+		return err
+	}
+	*t = parsed
+	return nil
+}
+
 func (t Token) Bytes() []byte {
 	result := make([]byte, Size)
 	copy(result, t[:])

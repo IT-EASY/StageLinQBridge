@@ -2,6 +2,7 @@ package mainconn
 
 import (
 	"errors"
+	"io"
 
 	stageencoding "github.com/it-easy/StageLinQBridge/internal/stagelinq/encoding"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/token"
@@ -27,6 +28,28 @@ type TimeStamp struct {
 	TimeAlive uint64
 }
 
+func BuildServiceAnnouncement(ownToken token.Token, name string, port uint16) []byte {
+	writer := stageencoding.NewWriter()
+
+	writer.Uint32(MessageServicesAnnouncement)
+	writer.Bytes(ownToken.Bytes())
+	stageencoding.WriteNetworkStringUTF16(writer, name)
+	writer.Uint16(port)
+
+	return writer.Data()
+}
+
+func BuildReferenceMessage(ownToken, peerToken token.Token) []byte {
+	writer := stageencoding.NewWriter()
+
+	writer.Uint32(MessageTimeStamp)
+	writer.Bytes(ownToken.Bytes())
+	writer.Bytes(peerToken.Bytes())
+	writer.Uint64(0) // reference counter — always 0, same as SoundSwitch
+
+	return writer.Data()
+}
+
 func BuildServicesRequest(requestToken token.Token) []byte {
 	writer := stageencoding.NewWriter()
 
@@ -36,8 +59,8 @@ func BuildServicesRequest(requestToken token.Token) []byte {
 	return writer.Data()
 }
 
-func ParseMessage(data []byte) (uint32, any, error) {
-	reader := stageencoding.NewReader(data)
+func ParseMessage(r io.Reader) (uint32, any, error) {
+	reader := stageencoding.NewStreamReader(r)
 
 	messageID, err := reader.Uint32()
 	if err != nil {
