@@ -18,17 +18,18 @@ type PeerEvent struct {
 }
 
 type Server struct {
-	logger       *debug.Logger
-	listener     net.Listener
-	clientToken  token.Token
-	stateMapPort uint16
+	logger        *debug.Logger
+	listener      net.Listener
+	clientToken   token.Token
+	stateMapPort  uint16
+	beatInfoPort  uint16
 
 	peerEvents chan PeerEvent
 	seenIPs    map[string]bool
 	seenMu     sync.Mutex
 }
 
-func NewServer(logger *debug.Logger, clientToken token.Token, stateMapPort uint16) (*Server, error) {
+func NewServer(logger *debug.Logger, clientToken token.Token, stateMapPort uint16, beatInfoPort uint16) (*Server, error) {
 	ln, err := net.Listen("tcp4", ":0")
 	if err != nil {
 		return nil, err
@@ -38,6 +39,7 @@ func NewServer(logger *debug.Logger, clientToken token.Token, stateMapPort uint1
 		listener:     ln,
 		clientToken:  clientToken,
 		stateMapPort: stateMapPort,
+		beatInfoPort: beatInfoPort,
 		peerEvents:   make(chan PeerEvent, 8),
 		seenIPs:      make(map[string]bool),
 	}, nil
@@ -112,6 +114,13 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			if _, err := conn.Write(ann); err != nil {
 				s.logger.Warn("service announcement failed", "error", err)
 				return
+			}
+			if s.beatInfoPort != 0 {
+				ann2 := BuildServiceAnnouncement(s.clientToken, "BeatInfo", s.beatInfoPort)
+				if _, err := conn.Write(ann2); err != nil {
+					s.logger.Warn("beatinfo announcement failed", "error", err)
+					return
+				}
 			}
 
 			// Ask for the device's services.

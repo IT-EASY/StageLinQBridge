@@ -51,24 +51,18 @@ func (c *Client) Connect(ctx context.Context) error {
 		"version", c.device.SoftwareVersion,
 	)
 
-	// Start the read loop first so it is ready before we send anything.
+	// Start keepalive and read loop before sending anything — matches the
+	// reference implementation (go-stagelinq) which never sends type-0
+	// proactively on outbound; it only announces services in response to a
+	// type-2 ServicesRequest received from the remote side.
+	go c.keepaliveLoop(ctx)
 	go c.readLoop(ctx)
-
-	// Announce our own services before requesting theirs — mirrors what our
-	// server does on incoming connections.
-	ann := BuildServiceAnnouncement(c.clientToken, "StateMap", c.stateMapPort)
-	if _, err := conn.Write(ann); err != nil {
-		_ = conn.Close()
-		return err
-	}
 
 	req := BuildServicesRequest(c.clientToken)
 	if _, err := conn.Write(req); err != nil {
 		_ = conn.Close()
 		return err
 	}
-
-	go c.keepaliveLoop(ctx)
 
 	return nil
 }
@@ -202,10 +196,15 @@ func (c *Client) readLoop(ctx context.Context) {
 			)
 
 		case token.Token:
+			// PRIME 4 is asking what services we offer — respond with our StateMap port.
 			c.logger.Debug(
-				"services request received",
+				"services request received — announcing our StateMap",
 				"token", typed.Hex(),
 			)
+			ann := BuildServiceAnnouncement(c.clientToken, "StateMap", c.stateMapPort)
+			if _, err := c.conn.Write(ann); err != nil {
+				c.logger.Warn("failed to announce StateMap in response to services request", "error", err)
+			}
 
 		default:
 			c.logger.Trace(

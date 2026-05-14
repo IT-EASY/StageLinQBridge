@@ -7,14 +7,13 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
-	"time"
 
 	"github.com/it-easy/StageLinQBridge/internal/config"
 	"github.com/it-easy/StageLinQBridge/internal/debug"
 	"github.com/it-easy/StageLinQBridge/internal/network"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/announce"
+	"github.com/it-easy/StageLinQBridge/internal/stagelinq/beatinfo"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/discovery"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/mainconn"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/statemap"
@@ -132,9 +131,35 @@ func main() {
 		}
 	}()
 
+	// --- BeatInfo server -----------------------------------------------
+
+	beatInfoServer, err := beatinfo.NewServer(logger, clientToken)
+	if err != nil {
+		logger.Error("failed to start BeatInfo server", "error", err)
+		os.Exit(1)
+	}
+	go beatInfoServer.Serve(ctx)
+	beatInfoPort := beatInfoServer.Port()
+	logger.Info("BeatInfo server listening", "port", beatInfoPort)
+
+	// Log all beat events received from the device.
+	go func() {
+		for beat := range beatInfoServer.Beats() {
+			if len(beat.Players) == 0 {
+				continue
+			}
+			logger.Info("beat event",
+				"clock", beat.Clock,
+				"players", len(beat.Players),
+				"deck1_beat", beat.Players[0].Beat,
+				"deck1_bpm", beat.Players[0].BPM,
+			)
+		}
+	}()
+
 	// --- Main connection server -----------------------------------------
 
-	mainServer, err := mainconn.NewServer(logger, clientToken, stateMapPort)
+	mainServer, err := mainconn.NewServer(logger, clientToken, stateMapPort, beatInfoPort)
 	if err != nil {
 		logger.Error("failed to start main connection server", "error", err)
 		os.Exit(1)
@@ -150,7 +175,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// --- Discovery ------------------------------------------------------
+	// --- Discovery (logging only) --------------------------------------
 
 	listener := discovery.NewListener(logger)
 
@@ -160,94 +185,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	connected := make(map[string]bool)
-
-	// connectOutbound dials the device's main TCP port and waits for service
-	// announcements. Called both from UDP discovery and from PeerConnected.
-	connectOutbound := func(d discovery.Device) {
-		client := mainconn.NewClient(logger, d, clientToken, stateMapPort)
-
-		if err := client.Connect(ctx); err != nil {
-			logger.Error("outbound connect failed", "error", err, "device", d.IP.String())
-			return
-		}
-
-		waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer waitCancel()
-
-		if port, ok := client.WaitForService(waitCtx, "StateMap"); ok {
-			logger.Info("StateMap service available", "port", port)
-		} else {
-			logger.Warn("StateMap not announced within 10s")
-		}
-	}
-
-	// discoveredDevices maps IP → Device so PeerConnected events can look up
-	// the device's announced main connection port.
-	var discoveredMu sync.RWMutex
-	discoveredDevices := make(map[string]discovery.Device)
-
-	// Run discovery in background; connect outbound immediately on first sight.
 	go func() {
+		seen := make(map[string]bool)
 		for device := range devices {
 			if announcer.IsOwnDevice(device) {
-				continue
-			}
-			if device.Port == 0 {
 				continue
 			}
 			if device.SoftwareName == "OfflineAnalyzer" {
 				continue
 			}
-
 			key := device.TokenHex() + "@" + device.IP.String()
-			if connected[key] {
+			if seen[key] {
 				continue
 			}
-			connected[key] = true
-
+			seen[key] = true
 			logger.Info(
 				"device discovered",
 				"source", device.Source,
-				"action", device.Action,
 				"software", device.SoftwareName,
 				"version", device.SoftwareVersion,
 				"ip", device.IP.String(),
 				"port", device.Port,
 				"token", device.TokenHex(),
 			)
-
-			discoveredMu.Lock()
-			discoveredDevices[device.IP.String()] = device
-			discoveredMu.Unlock()
-
-			// Connect outbound immediately on discovery (go-stagelinq pattern).
-			go connectOutbound(device)
-		}
-	}()
-
-	// Also connect outbound when the PRIME 4 connects to our main server —
-	// this covers the case where it connects before we discover it via UDP.
-	go func() {
-		for event := range mainServer.PeerConnected() {
-			ipStr := event.RemoteIP.String()
-
-			discoveredMu.RLock()
-			dev, known := discoveredDevices[ipStr]
-			discoveredMu.RUnlock()
-
-			if !known {
-				logger.Warn("peer event from unknown device", "ip", ipStr)
-				continue
-			}
-
-			logger.Info("peer connected — initiating outbound services exchange",
-				"ip", ipStr, "port", dev.Port)
-
-			go func(d discovery.Device) {
-				time.Sleep(200 * time.Millisecond)
-				connectOutbound(d)
-			}(dev)
 		}
 	}()
 
