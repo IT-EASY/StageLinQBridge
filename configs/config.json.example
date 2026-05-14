@@ -1,0 +1,37 @@
+{
+  "network": {
+    "lan_ip": "192.168.1.x",
+    "token": ""
+  },
+  "sacn": {
+    "enabled": false,
+    "universe": 1,
+    "channels": {
+      "beat": 1,
+      "downbeat": 2,
+      "slow": 11
+    },
+    "pulse_ms": 50
+  },
+  "artnet": {
+    "enabled": false,
+    "target": "",
+    "universe": 0,
+    "channels": {
+      "beat": 1,
+      "downbeat": 2,
+      "slow": 11
+    },
+    "pulse_ms": 50
+  },
+  "osc": {
+    "enabled": false,
+    "target": "",
+    "addresses": {
+      "beat": "/stagelinq/beat",
+      "downbeat": "/stagelinq/downbeat",
+      "slow": "/stagelinq/slow"
+    },
+    "pulse_ms": 50
+  }
+}

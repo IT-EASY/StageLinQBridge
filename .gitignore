@@ -30,3 +30,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Claude Code workspace settings (local only)
+.claude/
+
+# Local config with real IPs and tokens — use configs/config.json.example instead
+configs/config.json

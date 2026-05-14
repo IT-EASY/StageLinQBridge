@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StageLinQBridge</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;color:#eee;font-family:monospace;display:flex;flex-direction:column;font-size:12px;user-select:none;overflow:hidden}
+
+/* ── Header ── */
+#hdr{background:#0a0a0a;border-bottom:1px solid #2a2a2a;flex-shrink:0;padding:6px 10px;
+     display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+#hdr h1{font-size:10px;color:#888;letter-spacing:3px;text-transform:uppercase;white-space:nowrap;margin-right:4px}
+
+/* Crossfader */
+#xf-area{display:flex;align-items:center;gap:6px;min-width:120px;flex:1;max-width:180px}
+#xf-area .xf-lbl{font-size:9px;color:#999;letter-spacing:1px;white-space:nowrap}
+#xf-track{flex:1;height:5px;background:#2a2a2a;border-radius:3px;position:relative}
+#xf-knob{position:absolute;top:-4px;width:9px;height:13px;background:#666;border-radius:2px;
+         transform:translateX(-50%);left:50%;transition:left .1s}
+
+/* Control groups */
+.ctrl-group{display:flex;align-items:center;gap:4px;white-space:nowrap}
+.ctrl-label{font-size:10px;color:#aaa;letter-spacing:1px;margin-right:3px}
+.btn{background:#1e1e1e;border:1px solid #444;color:#bbb;padding:4px 12px;font-size:11px;
+     cursor:pointer;border-radius:3px;font-family:monospace;transition:all .1s;line-height:1}
+.btn:hover{border-color:#777;color:#eee;background:#252525}
+.btn.on{background:#1a1a2e;border-color:#55f;color:#99f}
+
+/* ── Deck grid ── */
+#grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:4px}
+
+.deck{background:#161616;border:1px solid #222;border-radius:3px;padding:6px 7px;
+      display:flex;flex-direction:column;gap:4px;overflow:hidden;transition:border-color .15s,opacity .15s}
+.deck.active {border-color:#2e2e2e}
+.deck.inactive{opacity:.28}
+
+/* ── Deck header ── */
+.dh{display:flex;align-items:center;gap:4px}
+.dnum{font-size:9px;color:#888;width:34px;letter-spacing:1px;flex-shrink:0}
+.pdot{width:7px;height:7px;border-radius:50%;background:#222;flex-shrink:0;transition:background .1s,box-shadow .1s}
+.pdot.playing{background:#1c1;box-shadow:0 0 5px #1c1}
+.mbadge{font-size:8px;padding:0 3px;border:1px solid #333;color:#555;border-radius:2px;
+        visibility:hidden;letter-spacing:1px}
+.mbadge.on{visibility:visible;border-color:#a80;color:#a80}
+.bpm{font-size:10px;color:#999;margin-left:auto;white-space:nowrap}
+
+/* LIVE toggle */
+.live{font-size:8px;padding:1px 4px;border-radius:2px;cursor:pointer;
+      transition:all .12s;flex-shrink:0;letter-spacing:1px;border:1px solid #1a3a1a;color:#1a3a1a}
+.live.on {border-color:#1d5;color:#1d5}
+.live.off{border-color:#5a1a1a;color:#5a1a1a}
+.live:hover{opacity:.75}
+
+/* Channel LEDs */
+.leds{display:flex;gap:3px}
+.led{width:6px;height:6px;border-radius:50%;background:#1a1a1a;flex-shrink:0}
+.lb.on{background:#f82;box-shadow:0 0 5px #f82}
+.lo.on{background:#0cf;box-shadow:0 0 6px #0cf}
+.lr.on{background:#d0d;box-shadow:0 0 8px #d0d}
+
+/* Fader bar */
+.fw{height:3px;background:#141414;border-radius:2px;overflow:hidden}
+.fb{height:100%;width:100%;background:#1e3a1e;border-radius:2px;transition:width .1s}
+
+/* Track info */
+.artist{font-size:10px;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title {font-size:11px;font-weight:bold;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── Beat blocks ── */
+.bb-row{display:flex;gap:3px;margin-top:3px;height:10px}
+.bb{flex:1;background:#1e1e1e;border-radius:2px;overflow:hidden;position:relative}
+.bb-fill{position:absolute;left:0;top:0;height:100%;width:0%;border-radius:2px;
+         transition:width .04s linear,background .06s}
+/* states */
+.bb-fill.empty  {background:transparent;width:0%}
+.bb-fill.filling{background:#2d4a6a}
+.bb-fill.done   {background:#253d56;width:100%}
+/* onset flash — all blocks briefly cyan before bar resets */
+.bb-fill.onset  {background:#0cf !important;width:100% !important;transition:none !important}
+</style>
+</head>
+<body>
+<div id="hdr">
+  <h1>StageLinQBridge</h1>
+
+  <div id="xf-area" title="Crossfader-Position des Mixers — beeinflusst das automatische Beat-Routing">
+    <span class="xf-lbl">XFADER</span>
+    <span class="xf-lbl">A</span>
+    <div id="xf-track"><div id="xf-knob"></div></div>
+    <span class="xf-lbl">B</span>
+  </div>
+
+  <div class="ctrl-group">
+    <span class="ctrl-label">TAKT</span>
+    <button class="btn" data-ts="3">3/4</button>
+    <button class="btn on" data-ts="4">4/4</button>
+  </div>
+
+  <div class="ctrl-group">
+    <span class="ctrl-label">SLOW ÷</span>
+    <button class="btn" data-rd="16">16</button>
+    <button class="btn" data-rd="32">32</button>
+    <button class="btn on" data-rd="64">64</button>
+    <button class="btn" data-rd="128">128</button>
+  </div>
+
+  <div class="ctrl-group">
+    <span class="ctrl-label">OUTPUT</span>
+    <button class="btn" data-proto="sacn">sACN</button>
+    <button class="btn" data-proto="artnet">Art-Net</button>
+    <button class="btn" data-proto="osc">OSC</button>
+  </div>
+</div>
+
+<div id="grid"></div>
+
+<script>
+// ── Build deck cards ─────────────────────────────────────────────────────────
+var g = document.getElementById('grid');
+for (var i = 0; i < 4; i++) {
+  var el = document.createElement('div');
+  el.className = 'deck inactive';
+  el.id = 'd' + i;
+  el.innerHTML =
+    '<div class="dh">' +
+      '<span class="dnum">DECK ' + (i+1) + '</span>' +
+      '<span class="pdot" id="dot' + i + '"></span>' +
+      '<span class="mbadge" id="mst' + i + '">M</span>' +
+      '<div class="leds">' +
+        '<span class="led lb" id="lb' + i + '" title="Beat"></span>' +
+        '<span class="led lo" id="lo' + i + '" title="OnSet"></span>' +
+        '<span class="led lr" id="lr' + i + '" title="Retard"></span>' +
+      '</div>' +
+      '<span class="live on" id="live' + i + '" title="Beat routing">LIVE</span>' +
+      '<span class="bpm" id="bpm' + i + '">—</span>' +
+    '</div>' +
+    '<div class="fw" id="fw' + i + '" style="display:none">' +
+      '<div class="fb" id="fb' + i + '"></div>' +
+    '</div>' +
+    '<div class="artist" id="ar' + i + '">No track</div>' +
+    '<div class="title"  id="ti' + i + '">—</div>' +
+    '<div class="bb-row" id="bbr' + i + '"></div>';
+  g.appendChild(el);
+}
+
+// ── State ────────────────────────────────────────────────────────────────────
+var manualOn = [true, true, true, true];
+var hasFader  = [false, false, false, false];
+var curTimeSig = 4;
+
+// Build beat blocks for a deck (called when timeSig changes or on init).
+function buildBlocks(deck, n) {
+  var row = document.getElementById('bbr' + deck);
+  row.innerHTML = '';
+  for (var b = 0; b < n; b++) {
+    var bb = document.createElement('div');
+    bb.className = 'bb';
+    bb.id = 'bb' + deck + '_' + b;
+    bb.innerHTML = '<div class="bb-fill empty" id="bf' + deck + '_' + b + '"></div>';
+    row.appendChild(bb);
+  }
+}
+for (var i = 0; i < 4; i++) buildBlocks(i, 4);
+
+function updateBlocks(deck, beatInBar, beatFrac, ts) {
+  for (var b = 0; b < ts; b++) {
+    var fill = document.getElementById('bf' + deck + '_' + b);
+    if (!fill) continue;
+    if (b < beatInBar) {
+      fill.className = 'bb-fill done';
+    } else if (b === beatInBar) {
+      fill.className = 'bb-fill filling';
+      fill.style.width = (beatFrac * 100).toFixed(1) + '%';
+    } else {
+      fill.className = 'bb-fill empty';
+      fill.style.width = '0%';
+    }
+  }
+}
+
+function onsetFlash(deck, ts) {
+  for (var b = 0; b < ts; b++) {
+    (function(bl) {
+      var fill = document.getElementById('bf' + deck + '_' + bl);
+      if (!fill) return;
+      fill.className = 'bb-fill onset';
+      clearTimeout(fill._ot);
+      fill._ot = setTimeout(function() {
+        fill.className = 'bb-fill empty';
+        fill.style.width = '0%';
+      }, 200);
+    })(b);
+  }
+}
+
+// ── LIVE toggles ─────────────────────────────────────────────────────────────
+function setLive(deck, active) {
+  manualOn[deck] = active;
+  document.getElementById('live' + deck).className = 'live ' + (active ? 'on' : 'off');
+  fetch('/route', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({deck: deck, active: active})});
+}
+for (var j = 0; j < 4; j++) {
+  (function(idx) {
+    document.getElementById('live' + idx).addEventListener('click', function(){
+      setLive(idx, !manualOn[idx]);
+    });
+  })(j);
+}
+
+// ── TAKT buttons ─────────────────────────────────────────────────────────────
+document.querySelectorAll('[data-ts]').forEach(function(b) {
+  b.addEventListener('click', function() {
+    var ts = parseInt(this.dataset.ts);
+    document.querySelectorAll('[data-ts]').forEach(function(x){ x.classList.remove('on'); });
+    this.classList.add('on');
+    curTimeSig = ts;
+    for (var i = 0; i < 4; i++) buildBlocks(i, ts);
+    fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({timeSig: ts})});
+  });
+});
+
+// ── Protocol OUTPUT buttons ───────────────────────────────────────────────────
+document.querySelectorAll('[data-proto]').forEach(function(b) {
+  b.addEventListener('click', function() {
+    var proto = this.dataset.proto;
+    var nowOn = !this.classList.contains('on');
+    this.classList.toggle('on', nowOn);
+    var body = {};
+    body[proto] = nowOn;
+    fetch('/protocol', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)});
+  });
+});
+
+// ── SLOW (retard) buttons ─────────────────────────────────────────────────────
+document.querySelectorAll('[data-rd]').forEach(function(b) {
+  b.addEventListener('click', function() {
+    document.querySelectorAll('[data-rd]').forEach(function(x){ x.classList.remove('on'); });
+    this.classList.add('on');
+    fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({retardDiv: parseInt(this.dataset.rd)})});
+  });
+});
+
+// ── Load initial state ────────────────────────────────────────────────────────
+function loadState() {
+  fetch('/state').then(function(r){ return r.json(); }).then(function(s) {
+    if (s.routes) s.routes.forEach(function(a, i) {
+      manualOn[i] = a;
+      document.getElementById('live' + i).className = 'live ' + (a ? 'on' : 'off');
+    });
+    if (s.retardDiv) document.querySelectorAll('[data-rd]').forEach(function(b){
+      b.classList.toggle('on', parseInt(b.dataset.rd) === s.retardDiv);
+    });
+    if (s.timeSig && s.timeSig !== curTimeSig) {
+      curTimeSig = s.timeSig;
+      document.querySelectorAll('[data-ts]').forEach(function(b){
+        b.classList.toggle('on', parseInt(b.dataset.ts) === s.timeSig);
+      });
+      for (var i = 0; i < 4; i++) buildBlocks(i, s.timeSig);
+    }
+    // Sync protocol buttons
+    if (s.protocols) {
+      document.querySelectorAll('[data-proto]').forEach(function(b){
+        var p = b.dataset.proto;
+        b.classList.toggle('on', s.protocols[p] === true);
+      });
+    }
+  }).catch(function(){});
+}
+loadState();
+
+// ── Flash helper ─────────────────────────────────────────────────────────────
+function flash(id, cls, ms) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.classList.add(cls);
+  clearTimeout(el._ft);
+  el._ft = setTimeout(function(){ el.classList.remove(cls); }, ms);
+}
+
+// ── SSE ──────────────────────────────────────────────────────────────────────
+var es = new EventSource('/events');
+
+es.addEventListener('state', function(e) {
+  var data = JSON.parse(e.data);
+  var ds = data.decks;
+
+  // Crossfader — raw value for routing, with ±3 % visual center-snap for display
+  var xf = data.crossfader != null ? data.crossfader : 0.5;
+  var xfDisp = (Math.abs(xf - 0.5) < 0.03) ? 0.5 : xf;
+  document.getElementById('xf-knob').style.left = (xfDisp * 100).toFixed(1) + '%';
+
+  for (var i = 0; i < 4; i++) {
+    var d = ds[i];
+    var hasTrack = d.artist || d.title;
+
+    // Card class = track presence only (NOT routing)
+    document.getElementById('d' + i).className = 'deck ' + (hasTrack ? 'active' : 'inactive');
+
+    document.getElementById('dot' + i).className = 'pdot' + (d.playing ? ' playing' : '');
+    document.getElementById('mst' + i).className = 'mbadge' + (d.isMaster ? ' on' : '');
+    document.getElementById('bpm' + i).textContent = d.bpm > 0 ? d.bpm.toFixed(1) : '—';
+    document.getElementById('ar'  + i).textContent = d.artist || 'No track';
+    document.getElementById('ti'  + i).textContent = d.title  || '—';
+
+    // LIVE button: sync from backend effective route
+    var live = document.getElementById('live' + i);
+    if (!manualOn[i]) {
+      live.className = 'live off'; // user force-muted
+    } else if (d.route) {
+      live.className = 'live on';  // routing active
+    } else {
+      live.className = 'live';     // auto-muted (fader closed)
+    }
+
+    // Beat blocks
+    var bib = d.beatInBar != null ? d.beatInBar : 0;
+    updateBlocks(i, bib, d.beat, curTimeSig);
+
+    // Fader bar
+    if (d.fader > 0 && !hasFader[i]) {
+      hasFader[i] = true;
+      document.getElementById('fw' + i).style.display = '';
+    }
+    if (hasFader[i]) {
+      document.getElementById('fb' + i).style.width = (d.fader * 100).toFixed(0) + '%';
+    }
+  }
+});
+
+es.addEventListener('beat', function(e) {
+  var i = JSON.parse(e.data).deck;
+  flash('lb' + i, 'on', 120);
+});
+
+es.addEventListener('downbeat', function(e) {
+  var i = JSON.parse(e.data).deck;
+  flash('lo' + i, 'on', 200);
+  onsetFlash(i, curTimeSig);
+});
+
+es.addEventListener('slow', function(e) {
+  var i = JSON.parse(e.data).deck;
+  flash('lr' + i, 'on', 400);
+});
+
+es.addEventListener('error', function() { setTimeout(loadState, 2000); });
+
+// Enforce compact window size — works in Edge/Chrome app mode.
+// Ignored gracefully in a regular browser tab.
+try { window.resizeTo(1200, 230); window.moveTo(10, 10); } catch(e) {}
+</script>
+</body>
+</html>
