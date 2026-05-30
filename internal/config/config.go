@@ -60,7 +60,7 @@ type OSCConfig struct {
 func Default() *Config {
 	return &Config{
 		SACN: SACNConfig{
-			Enabled:  false,
+			Enabled:  true,
 			Universe: 1,
 			Channels: ChannelMap{Beat: 1, Downbeat: 2, Slow: 11},
 			PulseMS:  50,
@@ -74,7 +74,7 @@ func Default() *Config {
 		},
 		OSC: OSCConfig{
 			Enabled: false,
-			Target:  "192.168.1.100:9000",
+			Target:  "",
 			Addresses: AddressMap{
 				Beat:     "/stagelinq/beat",
 				Downbeat: "/stagelinq/downbeat",

@@ -21,6 +21,7 @@ type Server struct {
 	logger        *debug.Logger
 	listener      net.Listener
 	clientToken   token.Token
+	tokenMu       sync.Mutex // protects clientToken
 	stateMapPort  uint16
 	beatInfoPort  uint16
 
@@ -43,6 +44,13 @@ func NewServer(logger *debug.Logger, clientToken token.Token, stateMapPort uint1
 		peerEvents:   make(chan PeerEvent, 8),
 		seenIPs:      make(map[string]bool),
 	}, nil
+}
+
+// UpdateToken updates the token used in service announcements for future connections.
+func (s *Server) UpdateToken(t token.Token) {
+	s.tokenMu.Lock()
+	s.clientToken = t
+	s.tokenMu.Unlock()
 }
 
 func (s *Server) Port() uint16 {
@@ -110,13 +118,16 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			s.logger.Debug("incoming services request", "remote", remote, "token", typed.Hex())
 
 			// Announce our own services.
-			ann := BuildServiceAnnouncement(s.clientToken, "StateMap", s.stateMapPort)
+			s.tokenMu.Lock()
+			tok := s.clientToken
+			s.tokenMu.Unlock()
+			ann := BuildServiceAnnouncement(tok, "StateMap", s.stateMapPort)
 			if _, err := conn.Write(ann); err != nil {
 				s.logger.Warn("service announcement failed", "error", err)
 				return
 			}
 			if s.beatInfoPort != 0 {
-				ann2 := BuildServiceAnnouncement(s.clientToken, "BeatInfo", s.beatInfoPort)
+				ann2 := BuildServiceAnnouncement(tok, "BeatInfo", s.beatInfoPort)
 				if _, err := conn.Write(ann2); err != nil {
 					s.logger.Warn("beatinfo announcement failed", "error", err)
 					return
@@ -124,7 +135,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			}
 
 			// Ask for the device's services.
-			req := BuildServicesRequest(s.clientToken)
+			req := BuildServicesRequest(tok)
 			if _, err := conn.Write(req); err != nil {
 				s.logger.Warn("services reply failed", "error", err)
 				return

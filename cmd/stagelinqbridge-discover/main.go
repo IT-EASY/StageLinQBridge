@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -71,31 +72,43 @@ func main() {
 	}
 
 	// --- LAN-Interface validieren ---------------------------------------
+	// Zeigt einen Setup-Dialog wenn lan_ip fehlt, falsch ist oder der Adapter
+	// gerade nicht verbunden ist. Schleife damit der Dialog bei Abbruch + Neustart
+	// erneut erscheinen kann.
 
 	var lanIP net.IP
 
-	if cfg.Network.LANIP != "" {
-		var available []net.IP
-		lanIP, available, err = network.ValidateLANIP(cfg.Network.LANIP)
-		if err != nil {
-			ips := make([]string, len(available))
-			for i, ip := range available {
-				ips[i] = ip.String()
+	for {
+		if cfg.Network.LANIP == "" {
+			logger.Warn("lan_ip nicht konfiguriert — Setup-Dialog wird geöffnet")
+			runSetupDialog(cfgPath, cfg, logger)
+			if cfg, err = config.Load(cfgPath); err != nil {
+				logger.Error("config-Reload nach Setup fehlgeschlagen", "error", err)
+				os.Exit(1)
 			}
-			hint := ""
-			if len(ips) > 0 {
-				hint = fmt.Sprintf(" — verfügbare LAN-IPs: %s", strings.Join(ips, ", "))
-			}
-			logger.Error("lan_ip ungültig", "error", fmt.Sprintf("%s%s", err, hint))
+			continue
+		}
+		var validateErr error
+		lanIP, _, validateErr = network.ValidateLANIP(cfg.Network.LANIP)
+		if validateErr == nil {
+			logger.Info("LAN-Interface konfiguriert", "lan_ip", lanIP.String())
+			break
+		}
+		logger.Warn("lan_ip ungültig oder Adapter nicht verbunden — Setup-Dialog wird geöffnet",
+			"ip", cfg.Network.LANIP, "error", validateErr)
+		runSetupDialog(cfgPath, cfg, logger)
+		if cfg, err = config.Load(cfgPath); err != nil {
+			logger.Error("config-Reload nach Setup fehlgeschlagen", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("LAN-Interface konfiguriert", "lan_ip", lanIP.String())
-	} else {
-		logger.Warn("lan_ip nicht konfiguriert, sende auf allen aktiven LAN-Interfaces")
 	}
 
 	// --- Token ----------------------------------------------------------
 
+	// The token identifies this app to the PRIME 4.
+	// Default: the known StageLinQBridge token, accepted by PRIME 4 without
+	// any confirmation dialog. Persisted in config.json so it can be overridden
+	// manually if needed (e.g. two instances on the same network).
 	var clientToken token.Token
 	if cfg.Network.Token != "" {
 		if err := clientToken.ParseHex(cfg.Network.Token); err != nil {
@@ -104,16 +117,12 @@ func main() {
 		}
 		logger.Info("client token loaded from config", "token", clientToken.Hex())
 	} else {
-		clientToken, err = token.NewRandom()
-		if err != nil {
-			logger.Error("failed to create client token", "error", err)
-			os.Exit(1)
-		}
+		clientToken = token.StageLinQBridge
 		cfg.Network.Token = clientToken.Hex()
 		if saveErr := config.Save(cfgPath, cfg); saveErr != nil {
 			logger.Warn("could not persist token to config", "error", saveErr)
 		} else {
-			logger.Info("client token generated and saved", "token", clientToken.Hex())
+			logger.Info("client token set to default and saved", "token", clientToken.Hex())
 		}
 	}
 
@@ -229,6 +238,43 @@ func main() {
 		os.Exit(1)
 	}
 
+	// --- Token-Rotation Watchdog ----------------------------------------
+	// If the PRIME 4 blacklists a token (connection attempt failed before our
+	// TCP Accept loop was ready), it will silently ignore all subsequent HOWDYs
+	// with that token. The watchdog detects "no incoming main connection within
+	// 3 s after a HOWDY" and rotates to a fresh token, giving the PRIME 4 a
+	// clean slate.
+
+	go func() {
+		peerCh := mainServer.PeerConnected()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-peerCh:
+				if !ok {
+					return
+				}
+				logger.Info("PRIME 4 connected — token rotation watchdog stopped")
+				return
+			case <-time.After(3 * time.Second):
+				newTok, err := token.NewRandom()
+				if err != nil {
+					logger.Warn("token rotation: could not generate new token", "error", err)
+					continue
+				}
+				logger.Info("no PRIME 4 connection, rotating token", "new_token", newTok.Hex())
+				announcer.RotateToken(newTok)
+				mainServer.UpdateToken(newTok)
+				stateMapServer.UpdateToken(newTok)
+				cfg.Network.Token = newTok.Hex()
+				if saveErr := config.Save(cfgPath, cfg); saveErr != nil {
+					logger.Warn("could not save rotated token", "error", saveErr)
+				}
+			}
+		}
+	}()
+
 	// --- Discovery (logging only) ---------------------------------------
 
 	listener := discovery.NewListener(logger)
@@ -311,7 +357,43 @@ func main() {
 			"retardDiv": tracker.RetardDiv(),
 			"timeSig":   tracker.TimeSig(),
 			"protocols": outMgr.Enabled(),
+			"mode":      tracker.Mode(),
+			"beatType":  tracker.BeatType(),
 		})
+	})
+
+	// POST /mode — switch between "3ch" and "1ch" output mode
+	mux.HandleFunc("/mode", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		tracker.SetMode(body.Mode)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// POST /beattype — select active beat type for 1ch mode ("beat", "onset", "retard")
+	mux.HandleFunc("/beattype", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Type string `json:"type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		tracker.SetBeatType(body.Type)
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	// POST /protocol — toggle protocol senders at runtime
@@ -331,6 +413,18 @@ func main() {
 			logger.Info("protocol toggled", "protocol", proto, "enabled", enabled)
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+	// POST /shutdown — terminates the application
+	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		go func() {
+			time.Sleep(150 * time.Millisecond) // let the response flush
+			os.Exit(0)
+		}()
 	})
 	mux.Handle("/", http.FileServer(http.FS(webui.Files)))
 
@@ -358,40 +452,45 @@ func main() {
 // resolveConfigPath returns the path to config.json.
 //
 // Search order:
-//  1. <exe-directory>/config.json  — production layout (exe + config side-by-side)
-//  2. configs/config.json          — development fallback (repo working directory)
+//  1. <exe-directory>/config.json  — always preferred (production + dev)
+//  2. configs/config.json          — only when running via "go run" (exe in TempDir)
 //
 // If neither exists the exe-directory path is returned so the caller can write
 // a default config there.
 func resolveConfigPath() string {
-	// Prefer a config.json that already exists next to the running binary.
-	if exe, err := os.Executable(); err == nil {
-		p := filepath.Join(filepath.Dir(exe), "config.json")
-		if _, err := os.Stat(p); err == nil {
-			return p
+	exe, err := os.Executable()
+	if err != nil {
+		return "config.json"
+	}
+	exeDir := filepath.Dir(exe)
+
+	// Always prefer config.json next to the running binary.
+	primary := filepath.Join(exeDir, "config.json")
+	if _, err := os.Stat(primary); err == nil {
+		return primary
+	}
+
+	// Dev fallback ONLY for "go run": the temp binary lives inside os.TempDir().
+	// A compiled binary in the repo dir must NOT fall through here — it would
+	// pick up the developer's personal configs/config.json with a hardcoded IP.
+	if strings.HasPrefix(strings.ToLower(exeDir), strings.ToLower(os.TempDir())) {
+		if _, err := os.Stat("configs/config.json"); err == nil {
+			return "configs/config.json"
 		}
 	}
-	// Dev fallback: configs/config.json relative to working directory.
-	if _, err := os.Stat("configs/config.json"); err == nil {
-		return "configs/config.json"
-	}
-	// Neither exists — return exe-directory path so a default gets written there.
-	if exe, err := os.Executable(); err == nil {
-		return filepath.Join(filepath.Dir(exe), "config.json")
-	}
-	return "config.json"
+
+	return primary
 }
 
-// launchAppWindow opens the web UI in Edge (or Chrome) app-mode — no address bar,
-// no tabs, behaves like a standalone window. Falls back to the default browser.
-func launchAppWindow(url string) {
+// launchWindow opens url in Edge (or Chrome) app-mode with the given dimensions.
+// Falls back to the default browser if no Chromium-based browser is found.
+func launchWindow(url string, width, height, x, y int) {
 	args := []string{
 		"--app=" + url,
-		"--window-size=1200,230",
-		"--window-position=10,10",
+		fmt.Sprintf("--window-size=%d,%d", width, height),
+		fmt.Sprintf("--window-position=%d,%d", x, y),
 	}
 
-	// Look for Edge in common install paths (always present on Win10/11).
 	candidates := []string{}
 	for _, env := range []string{"ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"} {
 		if base := os.Getenv(env); base != "" {
@@ -399,7 +498,6 @@ func launchAppWindow(url string) {
 				filepath.Join(base, "Microsoft", "Edge", "Application", "msedge.exe"))
 		}
 	}
-	// Also try PATH (works if msedge is registered)
 	if p, err := exec.LookPath("msedge"); err == nil {
 		candidates = append([]string{p}, candidates...)
 	}
@@ -411,7 +509,149 @@ func launchAppWindow(url string) {
 			}
 		}
 	}
-
-	// Fallback: open in default browser (no app-mode guarantee)
 	_ = exec.Command("cmd", "/C", "start", "", url).Start()
+}
+
+// launchAppWindow opens the main web UI at the standard dimensions.
+func launchAppWindow(url string) { launchWindow(url, 1200, 260, 10, 10) }
+
+// setupHTML is the self-contained HTML page for the LAN-adapter setup dialog.
+const setupHTML = `<!DOCTYPE html>
+<html lang="de"><head>
+<meta charset="UTF-8"><title>StageLinQBridge · Setup</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;color:#eee;font-family:monospace;font-size:13px;
+     display:flex;flex-direction:column;justify-content:center;
+     height:100vh;padding:22px 24px;gap:12px;user-select:none;overflow:hidden}
+h1{font-size:10px;color:#555;letter-spacing:3px;text-transform:uppercase}
+p{font-size:12px;color:#999}
+select{width:100%;background:#1a1a1a;border:1px solid #3a3a3a;color:#eee;
+       padding:7px 10px;font-family:monospace;font-size:13px;border-radius:5px;cursor:pointer}
+select:focus{outline:none;border-color:#3c6}
+.btns{display:flex;gap:8px}
+button{flex:1;padding:8px;font-family:monospace;font-size:13px;cursor:pointer;
+       border-radius:5px;border:1px solid;transition:all .1s;font-weight:bold}
+#btn-ok{background:#152015;border-color:#3c6;color:#5d5}
+#btn-ok:hover{background:#1e3a1e;border-color:#5d5}
+#btn-ok:disabled{opacity:.3;cursor:default}
+#btn-exit{background:#1a0a0a;border-color:#6a2020;color:#d55}
+#btn-exit:hover{border-color:#d55;color:#f77}
+.warn{font-size:11px;color:#a60;display:none}
+</style></head><body>
+<h1>StageLinQBridge · Netzwerk-Setup</h1>
+<p id="lbl">LAN-Adapter auswählen:</p>
+<select id="sel"><option value="">Lade Adapter…</option></select>
+<p class="warn" id="warn"></p>
+<div class="btns">
+  <button id="btn-ok" disabled>&#10003; Übernehmen</button>
+  <button id="btn-exit">&#10005; Beenden</button>
+</div>
+<script>
+fetch('/adapters').then(function(r){return r.json();}).then(function(list){
+  var sel=document.getElementById('sel');
+  sel.innerHTML='';
+  if(!list||list.length===0){
+    document.getElementById('lbl').textContent='Kein LAN-Adapter gefunden.';
+    var w=document.getElementById('warn');
+    w.style.display='';
+    w.textContent='Ethernet-Kabel anschließen und App neu starten.';
+    return;
+  }
+  list.forEach(function(a){
+    var o=document.createElement('option');
+    o.value=a.ip; o.textContent=a.name+'  —  '+a.ip;
+    sel.appendChild(o);
+  });
+  document.getElementById('btn-ok').disabled=false;
+}).catch(function(){
+  document.getElementById('lbl').textContent='Fehler beim Laden der Adapter.';
+});
+document.getElementById('btn-ok').addEventListener('click',function(){
+  var ip=document.getElementById('sel').value; if(!ip)return;
+  this.disabled=true; this.textContent='Speichere…';
+  fetch('/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ip:ip})}).then(function(){window._applied=true;window.close();});
+});
+document.getElementById('btn-exit').addEventListener('click',function(){
+  fetch('/cancel',{method:'POST'}).finally(function(){window.close();});
+});
+// pagehide nur als Cancel werten wenn /apply noch nicht erfolgreich war
+window.addEventListener('pagehide',function(){
+  if(!window._applied) navigator.sendBeacon('/cancel');
+});
+</script></body></html>`
+
+// runSetupDialog starts a temporary HTTP server, opens a compact Edge app-mode
+// window listing all available LAN adapters, and blocks until the user either
+// picks one (config saved) or closes/cancels (os.Exit).
+func runSetupDialog(cfgPath string, cfg *config.Config, logger *debug.Logger) {
+	adapters, err := network.ListLANAdapters()
+	if err != nil {
+		logger.Warn("LAN-Adapter konnten nicht aufgelistet werden", "error", err)
+	}
+
+	type adapterJSON struct {
+		Name string `json:"name"`
+		IP   string `json:"ip"`
+	}
+	adapterList := make([]adapterJSON, len(adapters))
+	for i, a := range adapters {
+		adapterList[i] = adapterJSON{Name: a.Name, IP: a.IP.String()}
+	}
+
+	done := make(chan struct{})
+	var applied int32 // 1 nach erfolgreichem /apply — verhindert Doppel-Exit durch pagehide
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/adapters", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(adapterList)
+	})
+	mux.HandleFunc("/apply", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			IP string `json:"ip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IP == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		cfg.Network.LANIP = body.IP
+		if saveErr := config.Save(cfgPath, cfg); saveErr != nil {
+			logger.Error("config konnte nicht gespeichert werden", "error", saveErr)
+			http.Error(w, "save failed", http.StatusInternalServerError)
+			return
+		}
+		logger.Info("lan_ip via Setup-Dialog gesetzt", "ip", body.IP)
+		w.WriteHeader(http.StatusNoContent)
+		atomic.StoreInt32(&applied, 1)
+		go func() { time.Sleep(100 * time.Millisecond); close(done) }()
+	})
+	mux.HandleFunc("/cancel", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+		if atomic.LoadInt32(&applied) == 0 { // nur beenden wenn /apply noch nicht kam
+			go func() { time.Sleep(100 * time.Millisecond); os.Exit(0) }()
+		}
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, setupHTML)
+	})
+
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		logger.Error("Setup-Server konnte nicht gestartet werden", "error", err)
+		os.Exit(1)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		launchWindow(fmt.Sprintf("http://localhost:%d", port), 520, 210, 400, 300)
+	}()
+
+	<-done
+	_ = srv.Close()
 }

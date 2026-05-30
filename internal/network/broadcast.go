@@ -22,7 +22,9 @@ func BroadcastIPs(lanIP net.IP) ([]net.IP, error) {
 		if iface.Flags&net.FlagBroadcast == 0 {
 			continue
 		}
-		if !isLANInterface(iface) {
+		// When the user explicitly set lan_ip we trust their choice and skip
+		// the adapter-type filter — any active broadcast-capable interface is used.
+		if lanIP == nil && !isLANInterface(iface) {
 			continue
 		}
 

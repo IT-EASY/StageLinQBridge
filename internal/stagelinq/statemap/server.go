@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync"
 
 	"github.com/it-easy/StageLinQBridge/internal/debug"
 	"github.com/it-easy/StageLinQBridge/internal/stagelinq/mainconn"
@@ -22,9 +23,10 @@ type StateUpdate struct {
 // When a device connects it exchanges a hello handshake, subscribes to the
 // given state names, and emits received values on StateUpdates().
 type Server struct {
-	logger      *debug.Logger
-	listener    net.Listener
-	clientToken token.Token
+	logger        *debug.Logger
+	listener      net.Listener
+	clientToken   token.Token
+	tokenMu       sync.Mutex
 	subscriptions []string
 
 	updates chan StateUpdate
@@ -44,6 +46,13 @@ func NewServer(logger *debug.Logger, clientToken token.Token, subscriptions []st
 		subscriptions: subscriptions,
 		updates:       make(chan StateUpdate, 64),
 	}, nil
+}
+
+// UpdateToken updates the token used in StateMap hello replies.
+func (s *Server) UpdateToken(t token.Token) {
+	s.tokenMu.Lock()
+	s.clientToken = t
+	s.tokenMu.Unlock()
 }
 
 func (s *Server) Port() uint16 {
@@ -113,7 +122,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 	// Step 2: send our hello back — our local source port as the "port" field.
 	ourPort := uint16(conn.LocalAddr().(*net.TCPAddr).Port)
-	helloReply := mainconn.BuildServiceAnnouncement(s.clientToken, "StateMap", ourPort)
+	s.tokenMu.Lock()
+	tok := s.clientToken
+	s.tokenMu.Unlock()
+	helloReply := mainconn.BuildServiceAnnouncement(tok, "StateMap", ourPort)
 	if _, err := conn.Write(helloReply); err != nil {
 		s.logger.Warn("StateMap hello reply failed", "remote", remote, "error", err)
 		return

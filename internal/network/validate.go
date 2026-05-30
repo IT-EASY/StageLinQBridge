@@ -27,11 +27,10 @@ func ValidateLANIP(ipStr string) (ip net.IP, available []net.IP, err error) {
 		return
 	}
 
+	// No isLANInterface filter here — when the user explicitly configures lan_ip
+	// we accept any active broadcast-capable interface regardless of adapter type.
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagBroadcast == 0 {
-			continue
-		}
-		if !isLANInterface(iface) {
 			continue
 		}
 

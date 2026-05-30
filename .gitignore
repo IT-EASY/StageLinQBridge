@@ -34,5 +34,6 @@ go.work.sum
 # Claude Code workspace settings (local only)
 .claude/
 
-# Local config with real IPs and tokens — use configs/config.json.example instead
+# Local config with real IPs and tokens — never commit these
+config.json
 configs/config.json

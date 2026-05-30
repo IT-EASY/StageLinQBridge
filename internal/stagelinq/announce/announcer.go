@@ -3,6 +3,7 @@ package announce
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/it-easy/StageLinQBridge/internal/debug"
@@ -33,6 +34,7 @@ type Announcer struct {
 	softwareName    string
 	softwareVersion string
 	clientToken     token.Token
+	mu              sync.Mutex // protects clientToken
 
 	interval time.Duration
 }
@@ -79,7 +81,20 @@ func (a *Announcer) Start(ctx context.Context) error {
 }
 
 func (a *Announcer) ClientToken() token.Token {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.clientToken
+}
+
+// RotateToken sends EXIT with the current token, switches to newToken, and
+// immediately sends HOWDY. The background ticker continues with the new token.
+func (a *Announcer) RotateToken(newToken token.Token) {
+	a.send(ActionExit)
+	a.mu.Lock()
+	a.clientToken = newToken
+	a.mu.Unlock()
+	time.Sleep(200 * time.Millisecond)
+	a.send(ActionHowdy)
 }
 
 func (a *Announcer) IsOwnDevice(device discovery.Device) bool {
@@ -107,7 +122,16 @@ func (a *Announcer) send(action string) {
 
 	for _, ip := range broadcastIPs {
 		target := &net.UDPAddr{IP: ip, Port: discovery.DefaultPort}
-		conn, err := net.DialUDP("udp4", nil, target)
+
+		// Bind to lanIP so the outgoing UDP packet carries the correct source
+		// address. Without this, Windows picks arbitrarily on multi-homed
+		// adapters — the PRIME 4 would then try to connect back to the wrong IP.
+		var localAddr *net.UDPAddr
+		if a.lanIP != nil {
+			localAddr = &net.UDPAddr{IP: a.lanIP, Port: 0}
+		}
+
+		conn, err := net.DialUDP("udp4", localAddr, target)
 		if err != nil {
 			a.logger.Warn("announce dial failed", "target", target.String(), "error", err)
 			continue

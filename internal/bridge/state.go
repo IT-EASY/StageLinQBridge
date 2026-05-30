@@ -58,6 +58,13 @@ type Tracker struct {
 	retardDiv   int32    // beat divisor for retard channel
 	timeSig     int32    // beats per bar: 3 or 4 (default 4)
 	routeActive [4]int32 // manual kill: 1=allowed (default), 0=force-muted
+
+	// Output mode — controls which beat types reach the DMX/OSC output.
+	// mode:     0 = "3ch" (all three types simultaneously, default)
+	//           1 = "1ch" (only the selected beatType)
+	// beatType: 0 = "beat", 1 = "onset", 2 = "retard"
+	mode     int32
+	beatType int32
 }
 
 func NewTracker(hub *Hub) *Tracker {
@@ -127,6 +134,50 @@ func (t *Tracker) RouteActive() [4]bool {
 // RetardDiv returns the current retard divisor.
 func (t *Tracker) RetardDiv() int {
 	return int(atomic.LoadInt32(&t.retardDiv))
+}
+
+// SetMode switches between "3ch" (all types) and "1ch" (selected type only).
+func (t *Tracker) SetMode(m string) {
+	v := int32(0)
+	if m == "1ch" {
+		v = 1
+	}
+	atomic.StoreInt32(&t.mode, v)
+}
+
+// Mode returns the current output mode ("3ch" or "1ch").
+func (t *Tracker) Mode() string {
+	if atomic.LoadInt32(&t.mode) == 1 {
+		return "1ch"
+	}
+	return "3ch"
+}
+
+// SetBeatType sets which beat type is forwarded to output in 1ch mode.
+// Valid values: "beat", "onset", "retard".
+func (t *Tracker) SetBeatType(bt string) {
+	var v int32
+	switch bt {
+	case "onset":
+		v = 1
+	case "retard":
+		v = 2
+	default:
+		v = 0 // "beat"
+	}
+	atomic.StoreInt32(&t.beatType, v)
+}
+
+// BeatType returns the current beat type selection ("beat", "onset", or "retard").
+func (t *Tracker) BeatType() string {
+	switch atomic.LoadInt32(&t.beatType) {
+	case 1:
+		return "onset"
+	case 2:
+		return "retard"
+	default:
+		return "beat"
+	}
 }
 
 // effectiveRoute returns whether a deck should currently emit beat events.
@@ -304,22 +355,27 @@ func (t *Tracker) OnBeatEvent(e beatinfo.BeatEvent) {
 			t.decks[i].BeatInBar = int((cnt - 1) % ts)
 
 			if t.effectiveRoute(i) {
+				// In 1ch mode only one beat type reaches the DMX/OSC output.
+				// SSE events always fire so the deck LEDs in the UI stay live.
+				is1ch := atomic.LoadInt32(&t.mode) == 1
+				bt    := atomic.LoadInt32(&t.beatType) // 0=beat, 1=onset, 2=retard
+
 				t.hub.Broadcast("beat", BeatEvent{Deck: i})
-				if t.OutputFn != nil {
+				if t.OutputFn != nil && (!is1ch || bt == 0) {
 					t.OutputFn("beat", i)
 				}
 
 				// Downbeat = beat 1 of a new bar.
 				if cnt%ts == 0 {
 					t.hub.Broadcast("downbeat", BeatEvent{Deck: i})
-					if t.OutputFn != nil {
+					if t.OutputFn != nil && (!is1ch || bt == 1) {
 						t.OutputFn("downbeat", i)
 					}
 				}
 				// Slow = every N beats (formerly "retard").
 				if div > 0 && cnt%div == 0 {
 					t.hub.Broadcast("slow", BeatEvent{Deck: i})
-					if t.OutputFn != nil {
+					if t.OutputFn != nil && (!is1ch || bt == 2) {
 						t.OutputFn("slow", i)
 					}
 				}

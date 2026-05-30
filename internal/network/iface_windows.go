@@ -13,7 +13,8 @@ import (
 const ifTypeEthernetCSMACD = 6
 
 // isLANInterface reports whether iface is a physical wired Ethernet adapter.
-// WiFi (IEEE 802.11), Bluetooth, tunnels and virtual adapters are excluded.
+// WiFi, Bluetooth, tunnels and virtual adapters are excluded.
+// This filter is only used in auto-detect mode (no lan_ip configured).
 func isLANInterface(iface net.Interface) bool {
 	var size uint32
 	// First call: obtain required buffer size.

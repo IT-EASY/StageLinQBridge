@@ -1,123 +1,233 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>StageLinQBridge</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#111;color:#eee;font-family:monospace;display:flex;flex-direction:column;font-size:12px;user-select:none;overflow:hidden}
+body{background:#111;color:#eee;font-family:monospace;font-size:12px;
+     user-select:none;overflow:hidden;display:flex;flex-direction:column}
 
-/* ── Header ── */
-#hdr{background:#0a0a0a;border-bottom:1px solid #2a2a2a;flex-shrink:0;padding:6px 10px;
-     display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-#hdr h1{font-size:10px;color:#888;letter-spacing:3px;text-transform:uppercase;white-space:nowrap;margin-right:4px}
+/* ══ HEADER ═══════════════════════════════════════════════════════════════════ */
+#hdr{background:#0a0a0a;border-bottom:1px solid #252525;flex-shrink:0;
+     padding:6px 16px;display:flex;align-items:flex-start;justify-content:space-between}
 
-/* Crossfader */
-#xf-area{display:flex;align-items:center;gap:6px;min-width:120px;flex:1;max-width:180px}
-#xf-area .xf-lbl{font-size:9px;color:#999;letter-spacing:1px;white-space:nowrap}
-#xf-track{flex:1;height:5px;background:#2a2a2a;border-radius:3px;position:relative}
-#xf-knob{position:absolute;top:-4px;width:9px;height:13px;background:#666;border-radius:2px;
-         transform:translateX(-50%);left:50%;transition:left .1s}
+#hdr-title{font-size:11px;color:#555;letter-spacing:3px;text-transform:uppercase;
+            white-space:nowrap;align-self:center}
 
-/* Control groups */
-.ctrl-group{display:flex;align-items:center;gap:4px;white-space:nowrap}
-.ctrl-label{font-size:10px;color:#aaa;letter-spacing:1px;margin-right:3px}
-.btn{background:#1e1e1e;border:1px solid #444;color:#bbb;padding:4px 12px;font-size:11px;
-     cursor:pointer;border-radius:3px;font-family:monospace;transition:all .1s;line-height:1}
+/* Jede Gruppe: zentriertes Label oben, Buttons unten — damit alle Buttons
+   auf exakt derselben horizontalen Achse liegen */
+.ctrl-group{display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0}
+.grp-label{font-size:9px;color:#555;letter-spacing:1.5px;text-transform:uppercase;
+            text-align:center;white-space:nowrap;height:11px;line-height:11px}
+.grp-btns{display:flex;align-items:center;gap:5px}
+
+/* Standard-Buttons */
+.btn{background:#1c1c1c;border:1px solid #3a3a3a;color:#ccc;
+     padding:6px 14px;font-size:12px;cursor:pointer;border-radius:6px;
+     font-family:monospace;transition:all .12s;line-height:1.2;white-space:nowrap}
 .btn:hover{border-color:#777;color:#eee;background:#252525}
-.btn.on{background:#1a1a2e;border-color:#55f;color:#99f}
+.btn.on{background:#152015;border-color:#3c6;color:#5d5}
+.btn:disabled{opacity:.28;cursor:default;pointer-events:none}
+.btn[data-mode].on{background:#152015;border-color:#3c6;color:#5d5}
 
-/* ── Deck grid ── */
-#grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:4px}
+/* Große Beat-Typ-Buttons */
+.bt-wrap{display:flex;flex-direction:column;align-items:center;gap:5px}
+.btn-lg{padding:9px 26px;font-size:15px;font-weight:bold;letter-spacing:1px;
+        border-radius:10px;border-width:2px}
+.btn-lg[data-bt="beat"]  {border-color:#3a2500;color:#554}
+.btn-lg[data-bt="onset"] {border-color:#003520;color:#445}
+.btn-lg[data-bt="retard"]{border-color:#2a0035;color:#454}
+.btn-lg[data-bt="beat"].on  {background:#201500;border-color:#f93;color:#f93;box-shadow:0 0 14px #f924}
+.btn-lg[data-bt="onset"].on {background:#001c14;border-color:#0d9;color:#0d9;box-shadow:0 0 14px #0d94}
+.btn-lg[data-bt="retard"].on{background:#180025;border-color:#b0d;color:#b0d;box-shadow:0 0 14px #b0d4}
 
-.deck{background:#161616;border:1px solid #222;border-radius:3px;padding:6px 7px;
-      display:flex;flex-direction:column;gap:4px;overflow:hidden;transition:border-color .15s,opacity .15s}
-.deck.active {border-color:#2e2e2e}
-.deck.inactive{opacity:.28}
+.bt-led{width:8px;height:8px;border-radius:50%;background:#1e1e1e;transition:all .1s}
+.bt-led.beat-on  {background:#f93;box-shadow:0 0 7px #f93}
+.bt-led.onset-on {background:#0d9;box-shadow:0 0 7px #0d9}
+.bt-led.retard-on{background:#b0d;box-shadow:0 0 9px #b0d}
 
-/* ── Deck header ── */
-.dh{display:flex;align-items:center;gap:4px}
-.dnum{font-size:9px;color:#888;width:34px;letter-spacing:1px;flex-shrink:0}
-.pdot{width:7px;height:7px;border-radius:50%;background:#222;flex-shrink:0;transition:background .1s,box-shadow .1s}
-.pdot.playing{background:#1c1;box-shadow:0 0 5px #1c1}
-.mbadge{font-size:8px;padding:0 3px;border:1px solid #333;color:#555;border-radius:2px;
-        visibility:hidden;letter-spacing:1px}
-.mbadge.on{visibility:visible;border-color:#a80;color:#a80}
-.bpm{font-size:10px;color:#999;margin-left:auto;white-space:nowrap}
+/* Protokoll-Buttons */
+.proto-wrap{display:flex;flex-direction:column;align-items:center;gap:4px}
+.btn[data-proto].on{background:#141e14;border-color:#3c6;color:#5d5;box-shadow:0 0 8px #3c62}
+.proto-info{font-size:9px;color:#666;letter-spacing:.5px;white-space:nowrap;text-align:center}
 
-/* LIVE toggle */
-.live{font-size:8px;padding:1px 4px;border-radius:2px;cursor:pointer;
-      transition:all .12s;flex-shrink:0;letter-spacing:1px;border:1px solid #1a3a1a;color:#1a3a1a}
-.live.on {border-color:#1d5;color:#1d5}
-.live.off{border-color:#5a1a1a;color:#5a1a1a}
+/* EXIT — größer, auffälliger */
+#exit-btn{align-self:center;padding:9px 22px;font-size:14px;font-weight:bold;
+          border-color:#6a2020;color:#d55;letter-spacing:1px}
+#exit-btn:hover{border-color:#e55;color:#f77;background:#1c0a0a}
+
+/* ══ DECK-BEREICH ══════════════════════════════════════════════════════════════ */
+#content{display:flex;flex-direction:column;overflow:hidden}
+#grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;
+      padding:4px 4px 0 4px;height:130px}
+
+.deck{background:#161616;border:1px solid #1e1e1e;border-radius:4px;
+      padding:8px 10px;display:flex;flex-direction:column;gap:5px;
+      overflow:hidden;transition:border-color .15s,opacity .15s}
+.deck.active {border-color:#2c2c2c}
+.deck.inactive{opacity:.2}
+
+/* Deck-Header */
+.dh{display:flex;align-items:center;gap:5px}
+.dnum{font-size:10px;color:#666;width:38px;letter-spacing:1px;flex-shrink:0}
+.pdot{width:8px;height:8px;border-radius:50%;background:#1e1e1e;flex-shrink:0;
+      transition:all .1s}
+.pdot.playing{background:#1d1;box-shadow:0 0 6px #1d1}
+.mbadge{font-size:9px;padding:0 4px;border:1px solid #2a2a2a;color:#444;
+        border-radius:2px;visibility:hidden;letter-spacing:1px}
+.mbadge.on{visibility:visible;border-color:#b80;color:#d90}
+
+/* BPM — deutlich lesbar */
+.bpm{font-size:14px;color:#ccc;margin-left:auto;white-space:nowrap;font-weight:bold}
+
+/* LIVE-Toggle */
+.live{font-size:9px;padding:2px 6px;border-radius:3px;cursor:pointer;
+      transition:all .12s;flex-shrink:0;letter-spacing:1px;
+      border:1px solid #1a3a1a;color:#1a3a1a}
+.live.on {border-color:#2d6;color:#3e7}
+.live.off{border-color:#6a2020;color:#c44}
 .live:hover{opacity:.75}
 
-/* Channel LEDs */
+/* Channel-LEDs pro Deck */
 .leds{display:flex;gap:3px}
-.led{width:6px;height:6px;border-radius:50%;background:#1a1a1a;flex-shrink:0}
-.lb.on{background:#f82;box-shadow:0 0 5px #f82}
-.lo.on{background:#0cf;box-shadow:0 0 6px #0cf}
-.lr.on{background:#d0d;box-shadow:0 0 8px #d0d}
+.led{width:7px;height:7px;border-radius:50%;background:#1a1a1a;flex-shrink:0}
+.lb.on{background:#f93;box-shadow:0 0 5px #f93}
+.lo.on{background:#0d9;box-shadow:0 0 6px #0d9}
+.lr.on{background:#b0d;box-shadow:0 0 8px #b0d}
 
-/* Fader bar */
+/* Fader-Bar */
 .fw{height:3px;background:#141414;border-radius:2px;overflow:hidden}
-.fb{height:100%;width:100%;background:#1e3a1e;border-radius:2px;transition:width .1s}
+.fb{height:100%;background:#1e3a1e;border-radius:2px;transition:width .1s}
 
-/* Track info */
-.artist{font-size:10px;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.title {font-size:11px;font-weight:bold;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Track-Info — deutlich größer, hoher Kontrast */
+.artist{font-size:13px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title {font-size:15px;font-weight:bold;color:#f2f2f2;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* ── Beat blocks ── */
-.bb-row{display:flex;gap:3px;margin-top:3px;height:10px}
-.bb{flex:1;background:#1e1e1e;border-radius:2px;overflow:hidden;position:relative}
-.bb-fill{position:absolute;left:0;top:0;height:100%;width:0%;border-radius:2px;
+/* Beat-Blöcke */
+.bb-row{display:flex;gap:3px;height:9px}
+.bb{flex:1;background:#1a1a1a;border-radius:2px;overflow:hidden;position:relative}
+.bb-fill{position:absolute;inset:0;width:0%;border-radius:2px;
          transition:width .04s linear,background .06s}
-/* states */
 .bb-fill.empty  {background:transparent;width:0%}
-.bb-fill.filling{background:#2d4a6a}
-.bb-fill.done   {background:#253d56;width:100%}
-/* onset flash — all blocks briefly cyan before bar resets */
-.bb-fill.onset  {background:#0cf !important;width:100% !important;transition:none !important}
+.bb-fill.filling{background:#2a4060}
+.bb-fill.done   {background:#22334d;width:100%}
+.bb-fill.onset  {background:#0d9 !important;width:100% !important;transition:none !important}
+
+/* ══ CROSSFADER ════════════════════════════════════════════════════════════════
+   Zentriert, Breite = exakt 1 Deckbreite (25% des Grids inkl. Gaps)
+   Feste Breite und Höhe per CSS calc.                                          */
+#xf-wrap{display:flex;justify-content:center;
+         padding:5px 4px 7px 4px;flex-shrink:0}
+#xf-inner{display:flex;align-items:center;gap:8px;
+          width:calc((100% - 8px - 12px) / 4); /* = 1 Deckbreite */
+          height:20px;flex-shrink:0}
+#xf-lbl-a,#xf-lbl-b{font-size:9px;color:#555;letter-spacing:1px;flex-shrink:0}
+#xf-track{flex:1;height:5px;background:#222;border-radius:3px;position:relative}
+#xf-knob{position:absolute;top:-6px;width:11px;height:17px;background:#555;
+         border-radius:3px;transform:translateX(-50%);left:50%;transition:left .1s}
+#xf-knob:hover{background:#888}
+
+/* ══ STATUSBAR ═════════════════════════════════════════════════════════════════ */
+#statusbar{background:#080808;border-top:1px solid #1c1c1c;
+           padding:3px 14px;display:flex;align-items:center;gap:7px;flex-shrink:0}
+#status-dot{width:6px;height:6px;border-radius:50%;background:#282828;transition:background .3s}
+#status-dot.ok{background:#1d1;box-shadow:0 0 4px #1d1}
+#status-txt{font-size:9px;color:#444;letter-spacing:1px;text-transform:uppercase}
 </style>
 </head>
 <body>
+
+<!-- ══ HEADER ════════════════════════════════════════════════════════════════ -->
 <div id="hdr">
-  <h1>StageLinQBridge</h1>
 
-  <div id="xf-area" title="Crossfader-Position des Mixers — beeinflusst das automatische Beat-Routing">
-    <span class="xf-lbl">XFADER</span>
-    <span class="xf-lbl">A</span>
-    <div id="xf-track"><div id="xf-knob"></div></div>
-    <span class="xf-lbl">B</span>
+  <span id="hdr-title">StageLinQBridge</span>
+
+  <div class="ctrl-group">
+    <span class="grp-label">Modus</span>
+    <div class="grp-btns">
+      <button class="btn on" data-mode="3ch" title="Beat + OnSet + Retard gleichzeitig">3CH</button>
+      <button class="btn"    data-mode="1ch" title="Einen Typ wählen">1CH</button>
+    </div>
   </div>
 
   <div class="ctrl-group">
-    <span class="ctrl-label">TAKT</span>
-    <button class="btn" data-ts="3">3/4</button>
-    <button class="btn on" data-ts="4">4/4</button>
+    <span class="grp-label">Takt</span>
+    <div class="grp-btns">
+      <button class="btn"    data-ts="3">3/4</button>
+      <button class="btn on" data-ts="4">4/4</button>
+    </div>
   </div>
 
   <div class="ctrl-group">
-    <span class="ctrl-label">SLOW ÷</span>
-    <button class="btn" data-rd="16">16</button>
-    <button class="btn" data-rd="32">32</button>
-    <button class="btn on" data-rd="64">64</button>
-    <button class="btn" data-rd="128">128</button>
+    <span class="grp-label">Trigger</span>
+    <div class="grp-btns">
+      <div class="bt-wrap">
+        <button class="btn btn-lg on" data-bt="beat">Beat</button>
+        <span class="bt-led" id="gled-beat"></span>
+      </div>
+      <div class="bt-wrap">
+        <button class="btn btn-lg" data-bt="onset">OnSet</button>
+        <span class="bt-led" id="gled-onset"></span>
+      </div>
+      <div class="bt-wrap">
+        <button class="btn btn-lg" data-bt="retard">Retard</button>
+        <span class="bt-led" id="gled-retard"></span>
+      </div>
+    </div>
   </div>
 
   <div class="ctrl-group">
-    <span class="ctrl-label">OUTPUT</span>
-    <button class="btn" data-proto="sacn">sACN</button>
-    <button class="btn" data-proto="artnet">Art-Net</button>
-    <button class="btn" data-proto="osc">OSC</button>
+    <span class="grp-label">Slow ÷</span>
+    <div class="grp-btns">
+      <button class="btn"    data-rd="16">16</button>
+      <button class="btn"    data-rd="32">32</button>
+      <button class="btn on" data-rd="64">64</button>
+      <button class="btn"    data-rd="128">128</button>
+    </div>
+  </div>
+
+  <div class="ctrl-group">
+    <span class="grp-label">Output</span>
+    <div class="grp-btns">
+      <div class="proto-wrap">
+        <button class="btn" data-proto="sacn">sACN</button>
+        <span class="proto-info" id="info-sacn">U1 · CH 1</span>
+      </div>
+      <div class="proto-wrap">
+        <button class="btn" data-proto="osc">OSC</button>
+        <span class="proto-info" id="info-osc">/stagelinq/beat</span>
+      </div>
+    </div>
+  </div>
+
+  <button id="exit-btn" class="btn">&#x2715; EXIT</button>
+</div>
+
+<!-- ══ DECK-BEREICH ═══════════════════════════════════════════════════════════ -->
+<div id="content">
+  <div id="grid"></div>
+
+  <!-- Crossfader: 1 Deckbreite, zentriert unter den mittleren Decks -->
+  <div id="xf-wrap" title="Crossfader-Position">
+    <div id="xf-inner">
+      <span id="xf-lbl-a">A</span>
+      <div id="xf-track"><div id="xf-knob"></div></div>
+      <span id="xf-lbl-b">B</span>
+    </div>
   </div>
 </div>
 
-<div id="grid"></div>
+<!-- ══ STATUSBAR ══════════════════════════════════════════════════════════════ -->
+<div id="statusbar">
+  <span id="status-dot"></span>
+  <span id="status-txt">Connecting…</span>
+</div>
 
 <script>
-// ── Build deck cards ─────────────────────────────────────────────────────────
+// ── Deck-Cards aufbauen ───────────────────────────────────────────────────────
 var g = document.getElementById('grid');
 for (var i = 0; i < 4; i++) {
   var el = document.createElement('div');
@@ -133,69 +243,93 @@ for (var i = 0; i < 4; i++) {
         '<span class="led lo" id="lo' + i + '" title="OnSet"></span>' +
         '<span class="led lr" id="lr' + i + '" title="Retard"></span>' +
       '</div>' +
-      '<span class="live on" id="live' + i + '" title="Beat routing">LIVE</span>' +
+      '<span class="live on" id="live' + i + '" title="Beat-Routing">LIVE</span>' +
       '<span class="bpm" id="bpm' + i + '">—</span>' +
     '</div>' +
-    '<div class="fw" id="fw' + i + '" style="display:none">' +
-      '<div class="fb" id="fb' + i + '"></div>' +
-    '</div>' +
+    '<div class="fw" id="fw' + i + '" style="display:none"><div class="fb" id="fb' + i + '" style="width:0%"></div></div>' +
     '<div class="artist" id="ar' + i + '">No track</div>' +
     '<div class="title"  id="ti' + i + '">—</div>' +
     '<div class="bb-row" id="bbr' + i + '"></div>';
   g.appendChild(el);
 }
 
-// ── State ────────────────────────────────────────────────────────────────────
-var manualOn = [true, true, true, true];
-var hasFader  = [false, false, false, false];
-var curTimeSig = 4;
+// ── App-State ─────────────────────────────────────────────────────────────────
+var manualOn    = [true, true, true, true];
+var hasFader    = [false, false, false, false];
+var curTimeSig  = 4;
+var curMode     = '3ch';
+var curBeatType = 'beat';
 
-// Build beat blocks for a deck (called when timeSig changes or on init).
+// ── Beat-Blöcke ───────────────────────────────────────────────────────────────
 function buildBlocks(deck, n) {
   var row = document.getElementById('bbr' + deck);
   row.innerHTML = '';
   for (var b = 0; b < n; b++) {
-    var bb = document.createElement('div');
-    bb.className = 'bb';
-    bb.id = 'bb' + deck + '_' + b;
-    bb.innerHTML = '<div class="bb-fill empty" id="bf' + deck + '_' + b + '"></div>';
-    row.appendChild(bb);
+    var d = document.createElement('div');
+    d.className = 'bb'; d.id = 'bb' + deck + '_' + b;
+    d.innerHTML = '<div class="bb-fill empty" id="bf' + deck + '_' + b + '"></div>';
+    row.appendChild(d);
   }
 }
 for (var i = 0; i < 4; i++) buildBlocks(i, 4);
 
 function updateBlocks(deck, beatInBar, beatFrac, ts) {
   for (var b = 0; b < ts; b++) {
-    var fill = document.getElementById('bf' + deck + '_' + b);
-    if (!fill) continue;
-    if (b < beatInBar) {
-      fill.className = 'bb-fill done';
-    } else if (b === beatInBar) {
-      fill.className = 'bb-fill filling';
-      fill.style.width = (beatFrac * 100).toFixed(1) + '%';
-    } else {
-      fill.className = 'bb-fill empty';
-      fill.style.width = '0%';
-    }
+    var f = document.getElementById('bf' + deck + '_' + b);
+    if (!f) continue;
+    if      (b < beatInBar)  { f.className = 'bb-fill done';    f.style.width = '100%'; }
+    else if (b === beatInBar){ f.className = 'bb-fill filling'; f.style.width = (beatFrac*100).toFixed(1)+'%'; }
+    else                     { f.className = 'bb-fill empty';   f.style.width = '0%'; }
   }
 }
 
 function onsetFlash(deck, ts) {
   for (var b = 0; b < ts; b++) {
     (function(bl) {
-      var fill = document.getElementById('bf' + deck + '_' + bl);
-      if (!fill) return;
-      fill.className = 'bb-fill onset';
-      clearTimeout(fill._ot);
-      fill._ot = setTimeout(function() {
-        fill.className = 'bb-fill empty';
-        fill.style.width = '0%';
-      }, 200);
+      var f = document.getElementById('bf' + deck + '_' + bl); if (!f) return;
+      f.className = 'bb-fill onset';
+      clearTimeout(f._ot);
+      f._ot = setTimeout(function(){ f.className='bb-fill empty'; f.style.width='0%'; }, 200);
     })(b);
   }
 }
 
-// ── LIVE toggles ─────────────────────────────────────────────────────────────
+// ── Modus ─────────────────────────────────────────────────────────────────────
+function applyMode(mode) {
+  curMode = mode;
+  document.querySelectorAll('[data-mode]').forEach(function(b){
+    b.classList.toggle('on', b.dataset.mode === mode);
+  });
+  var is1ch = (mode === '1ch');
+  document.querySelectorAll('[data-bt]').forEach(function(b){
+    is1ch ? b.removeAttribute('disabled') : b.setAttribute('disabled', '');
+  });
+}
+
+function applyBeatType(bt) {
+  curBeatType = bt;
+  document.querySelectorAll('[data-bt]').forEach(function(b){
+    b.classList.toggle('on', b.dataset.bt === bt);
+  });
+}
+
+document.querySelectorAll('[data-mode]').forEach(function(b){
+  b.addEventListener('click', function(){
+    applyMode(this.dataset.mode);
+    fetch('/mode', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mode: this.dataset.mode})});
+  });
+});
+
+document.querySelectorAll('[data-bt]').forEach(function(b){
+  b.addEventListener('click', function(){
+    applyBeatType(this.dataset.bt);
+    fetch('/beattype', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({type: this.dataset.bt})});
+  });
+});
+
+// ── LIVE-Toggles ──────────────────────────────────────────────────────────────
 function setLive(deck, active) {
   manualOn[deck] = active;
   document.getElementById('live' + deck).className = 'live ' + (active ? 'on' : 'off');
@@ -203,16 +337,16 @@ function setLive(deck, active) {
     body: JSON.stringify({deck: deck, active: active})});
 }
 for (var j = 0; j < 4; j++) {
-  (function(idx) {
+  (function(idx){
     document.getElementById('live' + idx).addEventListener('click', function(){
       setLive(idx, !manualOn[idx]);
     });
   })(j);
 }
 
-// ── TAKT buttons ─────────────────────────────────────────────────────────────
-document.querySelectorAll('[data-ts]').forEach(function(b) {
-  b.addEventListener('click', function() {
+// ── Takt ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('[data-ts]').forEach(function(b){
+  b.addEventListener('click', function(){
     var ts = parseInt(this.dataset.ts);
     document.querySelectorAll('[data-ts]').forEach(function(x){ x.classList.remove('on'); });
     this.classList.add('on');
@@ -223,22 +357,9 @@ document.querySelectorAll('[data-ts]').forEach(function(b) {
   });
 });
 
-// ── Protocol OUTPUT buttons ───────────────────────────────────────────────────
-document.querySelectorAll('[data-proto]').forEach(function(b) {
-  b.addEventListener('click', function() {
-    var proto = this.dataset.proto;
-    var nowOn = !this.classList.contains('on');
-    this.classList.toggle('on', nowOn);
-    var body = {};
-    body[proto] = nowOn;
-    fetch('/protocol', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(body)});
-  });
-});
-
-// ── SLOW (retard) buttons ─────────────────────────────────────────────────────
-document.querySelectorAll('[data-rd]').forEach(function(b) {
-  b.addEventListener('click', function() {
+// ── Slow ÷ ────────────────────────────────────────────────────────────────────
+document.querySelectorAll('[data-rd]').forEach(function(b){
+  b.addEventListener('click', function(){
     document.querySelectorAll('[data-rd]').forEach(function(x){ x.classList.remove('on'); });
     this.classList.add('on');
     fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -246,10 +367,21 @@ document.querySelectorAll('[data-rd]').forEach(function(b) {
   });
 });
 
-// ── Load initial state ────────────────────────────────────────────────────────
+// ── Protokoll-Buttons ─────────────────────────────────────────────────────────
+document.querySelectorAll('[data-proto]').forEach(function(b){
+  b.addEventListener('click', function(){
+    var proto = this.dataset.proto, nowOn = !this.classList.contains('on');
+    this.classList.toggle('on', nowOn);
+    var body = {}; body[proto] = nowOn;
+    fetch('/protocol', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)});
+  });
+});
+
+// ── Initialzustand ────────────────────────────────────────────────────────────
 function loadState() {
-  fetch('/state').then(function(r){ return r.json(); }).then(function(s) {
-    if (s.routes) s.routes.forEach(function(a, i) {
+  fetch('/state').then(function(r){ return r.json(); }).then(function(s){
+    if (s.routes) s.routes.forEach(function(a, i){
       manualOn[i] = a;
       document.getElementById('live' + i).className = 'live ' + (a ? 'on' : 'off');
     });
@@ -263,97 +395,90 @@ function loadState() {
       });
       for (var i = 0; i < 4; i++) buildBlocks(i, s.timeSig);
     }
-    // Sync protocol buttons
-    if (s.protocols) {
-      document.querySelectorAll('[data-proto]').forEach(function(b){
-        var p = b.dataset.proto;
-        b.classList.toggle('on', s.protocols[p] === true);
-      });
-    }
+    if (s.protocols) document.querySelectorAll('[data-proto]').forEach(function(b){
+      b.classList.toggle('on', s.protocols[b.dataset.proto] === true);
+    });
+    if (s.mode)     applyMode(s.mode);
+    if (s.beatType) applyBeatType(s.beatType);
   }).catch(function(){});
 }
 loadState();
 
-// ── Flash helper ─────────────────────────────────────────────────────────────
+// ── Flash-Helper ──────────────────────────────────────────────────────────────
 function flash(id, cls, ms) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  el.classList.add(cls);
-  clearTimeout(el._ft);
+  var el = document.getElementById(id); if (!el) return;
+  el.classList.add(cls); clearTimeout(el._ft);
   el._ft = setTimeout(function(){ el.classList.remove(cls); }, ms);
 }
+function gFlash(ledId, cls, ms) {
+  var el = document.getElementById(ledId); if (!el) return;
+  el.className = 'bt-led ' + cls; clearTimeout(el._ft);
+  el._ft = setTimeout(function(){ el.className = 'bt-led'; }, ms);
+}
 
-// ── SSE ──────────────────────────────────────────────────────────────────────
+// ── SSE ───────────────────────────────────────────────────────────────────────
 var es = new EventSource('/events');
 
-es.addEventListener('state', function(e) {
-  var data = JSON.parse(e.data);
-  var ds = data.decks;
+es.addEventListener('state', function(e){
+  var data = JSON.parse(e.data), ds = data.decks;
+  document.getElementById('status-dot').className = 'ok';
+  document.getElementById('status-txt').textContent = 'Running';
 
-  // Crossfader — raw value for routing, with ±3 % visual center-snap for display
   var xf = data.crossfader != null ? data.crossfader : 0.5;
-  var xfDisp = (Math.abs(xf - 0.5) < 0.03) ? 0.5 : xf;
-  document.getElementById('xf-knob').style.left = (xfDisp * 100).toFixed(1) + '%';
+  var xfD = (Math.abs(xf - .5) < .03) ? .5 : xf;
+  document.getElementById('xf-knob').style.left = (xfD * 100).toFixed(1) + '%';
 
   for (var i = 0; i < 4; i++) {
-    var d = ds[i];
-    var hasTrack = d.artist || d.title;
-
-    // Card class = track presence only (NOT routing)
-    document.getElementById('d' + i).className = 'deck ' + (hasTrack ? 'active' : 'inactive');
-
-    document.getElementById('dot' + i).className = 'pdot' + (d.playing ? ' playing' : '');
+    var d = ds[i], hasTrack = d.artist || d.title;
+    document.getElementById('d'   + i).className = 'deck ' + (hasTrack ? 'active' : 'inactive');
+    document.getElementById('dot' + i).className = 'pdot' + (d.playing  ? ' playing' : '');
     document.getElementById('mst' + i).className = 'mbadge' + (d.isMaster ? ' on' : '');
     document.getElementById('bpm' + i).textContent = d.bpm > 0 ? d.bpm.toFixed(1) : '—';
     document.getElementById('ar'  + i).textContent = d.artist || 'No track';
     document.getElementById('ti'  + i).textContent = d.title  || '—';
 
-    // LIVE button: sync from backend effective route
     var live = document.getElementById('live' + i);
-    if (!manualOn[i]) {
-      live.className = 'live off'; // user force-muted
-    } else if (d.route) {
-      live.className = 'live on';  // routing active
-    } else {
-      live.className = 'live';     // auto-muted (fader closed)
-    }
+    live.className = 'live' + (!manualOn[i] ? ' off' : d.route ? ' on' : '');
 
-    // Beat blocks
-    var bib = d.beatInBar != null ? d.beatInBar : 0;
-    updateBlocks(i, bib, d.beat, curTimeSig);
+    updateBlocks(i, d.beatInBar != null ? d.beatInBar : 0, d.beat, curTimeSig);
 
-    // Fader bar
     if (d.fader > 0 && !hasFader[i]) {
       hasFader[i] = true;
       document.getElementById('fw' + i).style.display = '';
     }
-    if (hasFader[i]) {
-      document.getElementById('fb' + i).style.width = (d.fader * 100).toFixed(0) + '%';
-    }
+    if (hasFader[i]) document.getElementById('fb' + i).style.width = (d.fader * 100).toFixed(0) + '%';
   }
 });
 
-es.addEventListener('beat', function(e) {
+es.addEventListener('beat', function(e){
   var i = JSON.parse(e.data).deck;
   flash('lb' + i, 'on', 120);
+  gFlash('gled-beat', 'beat-on', 120);
 });
-
-es.addEventListener('downbeat', function(e) {
+es.addEventListener('downbeat', function(e){
   var i = JSON.parse(e.data).deck;
   flash('lo' + i, 'on', 200);
   onsetFlash(i, curTimeSig);
+  gFlash('gled-onset', 'onset-on', 200);
 });
-
-es.addEventListener('slow', function(e) {
+es.addEventListener('slow', function(e){
   var i = JSON.parse(e.data).deck;
   flash('lr' + i, 'on', 400);
+  gFlash('gled-retard', 'retard-on', 400);
 });
 
-es.addEventListener('error', function() { setTimeout(loadState, 2000); });
+es.addEventListener('error', function(){
+  document.getElementById('status-dot').className = '';
+  document.getElementById('status-txt').textContent = 'Connecting…';
+  setTimeout(loadState, 2000);
+});
 
-// Enforce compact window size — works in Edge/Chrome app mode.
-// Ignored gracefully in a regular browser tab.
-try { window.resizeTo(1200, 230); window.moveTo(10, 10); } catch(e) {}
+// ── EXIT ──────────────────────────────────────────────────────────────────────
+document.getElementById('exit-btn').addEventListener('click', function(){
+  fetch('/shutdown', {method:'POST'}).finally(function(){ window.close(); });
+});
+
+try { window.resizeTo(1200, 260); window.moveTo(10, 10); } catch(e) {}
 </script>
 </body>
 </html>
