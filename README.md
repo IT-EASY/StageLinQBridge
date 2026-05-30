@@ -2,7 +2,7 @@
 
 > **[Deutsche Version](README.de.md)**
 
-A Go application that bridges **Denon PRIME DJ hardware** (PRIME 4, PRIME 2, SC6000 and compatible) to lighting and automation systems via **sACN/E1.31**, **Art-Net**, and **OSC**.
+A Go application that bridges **Denon PRIME DJ hardware** (PRIME 4, PRIME 2, SC6000 and compatible) to lighting and automation systems via **sACN/E1.31** and **OSC**.
 
 StageLinQBridge listens to live beat events from the StageLinQ protocol, evaluates channel fader and crossfader positions in real time, and fires DMX or OSC pulses — beat-synchronized, per deck, with automatic routing.
 
@@ -19,7 +19,6 @@ StageLinQBridge listens to live beat events from the StageLinQ protocol, evaluat
 | **Crossfader** | A/B/Through channel assignment is evaluated automatically |
 | **Manual mute** | Per-deck LIVE button in the Web UI overrides auto-routing |
 | **sACN / E1.31** | UDP multicast — no target IP configuration needed |
-| **Art-Net ArtDmx** | UDP **unicast only** — broadcast is intentionally not supported |
 | **OSC** | UDP unicast, float32 `1.0` trigger / `0.0` release |
 | **Runtime toggle** | Enable/disable each output protocol from the UI without restart |
 | **Web UI** | Auto-opens as a standalone Edge app window on startup |
@@ -74,13 +73,6 @@ On startup the application:
     },
     "pulse_ms": 50                // how long the channel stays at 255 (ms)
   },
-  "artnet": {
-    "enabled": false,
-    "target":   "192.168.1.50",  // target IP (required — no broadcast)
-    "universe": 0,                // Art-Net port-address 0–32767
-    "channels": { "beat": 1, "downbeat": 2, "slow": 11 },
-    "pulse_ms": 50
-  },
   "osc": {
     "enabled": false,
     "target": "192.168.1.100:9000",
@@ -111,10 +103,6 @@ If neither exists a default `config.json` is written next to the executable.
 
 UDP multicast to `239.255.{universe_hi}.{universe_lo}:5568`. No target IP needed — the multicast address is derived from the universe number. Full 638-byte E1.31 packet with 512-channel DMX frame, source name `StageLinQBridge`.
 
-### Art-Net ArtDmx
-
-UDP **unicast** to the configured `target` (default port 6454). **Broadcast is not supported by design** — beat triggers fire continuously (≈33 events/s from the BeatInfo stream) and would flood the entire network segment. If `target` is empty the sender is not initialized.
-
 ### OSC
 
 UDP unicast to `"ip:port"`. Sends float32 `1.0` on the configured address when an event fires, followed by float32 `0.0` after `pulse_ms` milliseconds.
@@ -132,7 +120,7 @@ Available at `http://localhost:8080`. Opens automatically in Edge app mode on st
 | Crossfader | A↔B position display |
 | **3/4 · 4/4** | Time signature selector |
 | **÷16 · ÷32 · ÷64 · ÷128** | Slow/Retard divisor |
-| **sACN · Art-Net · OSC** | Runtime protocol enable/disable |
+| **sACN · OSC** | Runtime protocol enable/disable |
 
 ---
 
@@ -159,7 +147,6 @@ internal/
   debug/                      Leveled console logger
   network/                    Interface validation, broadcast helpers
   output/                     Output manager
-    artnet/                   Art-Net ArtDmx sender (unicast)
     osc/                      OSC UDP sender
     sacn/                     sACN E1.31 sender (multicast)
   stagelinq/
