@@ -5,7 +5,7 @@
 ### Debug-Build (mit Konsolenfenster)
 
 ```
-go build -o StageLinQBridge.exe ./cmd/stagelinqbridge-discover/
+go build -o StageLinQBridge-debug.exe ./cmd/stagelinqbridge-discover/
 ```
 
 ### Release-Build (kein Konsolenfenster, startet direkt die Web-UI)
@@ -16,9 +16,37 @@ go build -ldflags="-H windowsgui" -o StageLinQBridge.exe ./cmd/stagelinqbridge-d
 
 ---
 
+## Windows SmartAppControl (Windows 11)
+
+Windows 11 blockiert unsignierte EXEs mit **SmartAppControl (SAC)** — ohne
+Ausweichmöglichkeit (kein „Trotzdem ausführen"-Button).
+
+### Sofortlösung: SAC deaktivieren (empfohlen für DJ-Laptops)
+
+> **Windows-Sicherheit → App- & Browsersteuerung → Smart App Control → Aus**
+
+⚠️ Das ist ein **einmaliger, dauerhafter Schalter** — lässt sich ohne
+Windows-Neuinstallation nicht rückgängig machen. Für einen dedizierten
+DJ-Laptop, auf dem nur bekannte Software läuft, ist das die pragmatische Wahl.
+
+### Langfristige Lösung: Code-Signing-Zertifikat
+
+Da StageLinQBridge Open Source ist, stehen kostenlose Optionen zur Verfügung:
+
+| Anbieter | Kosten | Link |
+|---|---|---|
+| **Certum Open Source** | kostenlos | https://www.certum.eu/en/open-source/ |
+| **SignPath Foundation** | kostenlos | https://signpath.io/product/open-source |
+| Certum Standard | ~50 €/Jahr | günstigstes kommerzielles OV-Zertifikat |
+
+Mit einem gültigen Zertifikat müssen sowohl **Installer** als auch **EXE**
+signiert werden — SAC prüft jede EXE beim Start unabhängig.
+
+---
+
 ## Windows-Firewall
 
-Die App benötigt eingehende **und** ausgehende Freigabe für **TCP und UDP** auf allen Ports.
+Die App benötigt eingehende **und** ausgehende Freigabe für **TCP und UDP**.
 Einmalig als Administrator ausführen:
 
 ```
@@ -26,20 +54,20 @@ netsh advfirewall firewall add rule name="StageLinQBridge" dir=in action=allow p
 netsh advfirewall firewall add rule name="StageLinQBridge" dir=out action=allow program="%CD%\StageLinQBridge.exe" enable=yes protocol=any
 ```
 
-> **Hinweis:** `%CD%` muss durch den tatsächlichen Pfad zur EXE ersetzt werden, z. B.  
-> `C:\DJTools\StageLinQBridge\StageLinQBridge.exe`
+> **Hinweis:** `%CD%` durch den tatsächlichen Pfad zur EXE ersetzen, z. B.
+> `C:\StageLinQ_Bridge\StageLinQBridge.exe`
 
-Alternativ lässt sich die App auch per GUI unter  
-**Windows-Sicherheit → Firewall → App durch Firewall zulassen** freigeben.
+Alternativ per GUI: **Windows-Sicherheit → Firewall → App durch Firewall zulassen**
 
 ---
 
 ## Konfiguration (`config.json`)
 
-Die `config.json` liegt im selben Verzeichnis wie die EXE.  
-Beim ersten Start wird eine Vorlage automatisch angelegt.
+Die `config.json` liegt im selben Verzeichnis wie die EXE.
+Beim ersten Start öffnet sich automatisch ein **Setup-Dialog** zur Auswahl
+des LAN-Adapters — die IP wird dann automatisch in `config.json` gespeichert.
 
-### Wichtigste Einstellung: `lan_ip`
+### Manuelle Konfiguration
 
 ```json
 {
@@ -49,36 +77,25 @@ Beim ersten Start wird eine Vorlage automatisch angelegt.
 }
 ```
 
-Hier muss die **IPv4-Adresse des Netzwerk-Adapters** eingetragen werden,  
-der sich im selben Netzwerk wie der Denon PRIME 4 befindet.
+Die IP-Adresse des Adapters ermitteln mit `ipconfig` — den LAN-Adapter
+heraussuchen, über den der PRIME 4 erreichbar ist.
 
-Die aktuell verfügbaren IP-Adressen lassen sich ermitteln mit:
+### Token
 
-```
-ipconfig
-```
+Der Token wird beim ersten Start automatisch generiert und in `config.json`
+gespeichert. Ein **Token-Rotation Watchdog** stellt sicher, dass die Verbindung
+zum PRIME 4 auch dann zustande kommt, wenn der erste Token-Versuch fehlschlägt.
 
-Den **LAN-Adapter** heraussuchen, über den der PRIME 4 erreichbar ist,  
-und dessen IPv4-Adresse in `lan_ip` eintragen.
-
-**Bleibt `lan_ip` leer**, sendet die App im Auto-Detect-Modus nur auf physischen  
-Ethernet-Adaptern (Typ 6) — auf Systemen mit mehreren Adaptern (z. B. LAN + VPN)  
-empfiehlt sich dennoch die explizite Konfiguration.
+> ⚠️ **`config.json` nie löschen** — sie enthält den Token, über den der PRIME 4
+> die App identifiziert. Bei einem neuen Token muss die Verbindung neu aufgebaut
+> werden, was mehrere Sekunden dauern kann.
 
 ---
 
 ## Deployment auf dem DJ-Laptop
 
-1. `StageLinQBridge.exe` **und `config.json`** in ein gemeinsames Verzeichnis kopieren.
-2. `config.json` öffnen und `lan_ip` auf die IP des Adapters setzen, der den PRIME 4 sieht.
-3. Firewall-Regeln wie oben anlegen (Pfad zur EXE anpassen).
-4. `StageLinQBridge.exe` starten — die Web-UI öffnet sich automatisch.
-
-> ⚠️ **Wichtig: `config.json` immer mitdeployen!**  
-> Die Datei enthält ein `token`-Feld (zufällig generiert beim ersten Start), das die App  
-> gegenüber dem PRIME 4 identifiziert. Beim **allerersten Kontakt** mit einem neuen Token  
-> erscheint auf dem PRIME 4 Touchscreen eine Bestätigungsabfrage — wird diese nicht  
-> bestätigt (oder übersehen), verweigert der PRIME 4 dauerhaft die Verbindung für dieses Token.  
->  
-> **Lösung:** Immer dieselbe `config.json` verwenden und nur `lan_ip` anpassen.  
-> Bei einem wirklichen Neustart mit neuem Token: Bestätigungsdialog am PRIME 4 beachten.
+1. `StageLinQBridge.exe` in ein Verzeichnis kopieren (z. B. `C:\StageLinQ_Bridge\`)
+2. SmartAppControl deaktivieren (siehe oben)
+3. Firewall-Regeln anlegen (Pfad zur EXE anpassen)
+4. `StageLinQBridge.exe` starten — Setup-Dialog erscheint beim ersten Start
+5. LAN-Adapter auswählen → App verbindet sich automatisch mit dem PRIME 4
